@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Licence Operations Desk</title>
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">LO</span><div><strong>Licence Operations</strong><small>Washington public records desk</small></div></div>
+      <nav aria-label="Primary navigation">
+        <button class="nav-item active" data-view="overview"><span>01</span> Briefing</button>
+        <button class="nav-item" data-view="people"><span>02</span> People</button>
+        <button class="nav-item" data-view="properties"><span>03</span> Properties</button>
+        <button class="nav-item" data-view="changes"><span>04</span> Changes <b id="change-count" class="count hidden"></b></button>
+      </nav>
+      <div class="sidebar-note"><span class="privacy-dot"></span><div><strong>Local workspace</strong><small>Saved records remain in this browser profile.</small></div></div>
+    </aside>
+
+    <main>
+      <header class="topbar">
+        <div class="title-group"><p class="kicker">LICENSING OPERATIONS DESK</p><h1 id="view-title">Briefing</h1><p id="view-subtitle">What deserves attention across your managed properties.</p></div>
+        <div class="top-actions">
+          <button id="quick-lookup" class="button quiet">Quick lookup</button>
+          <button id="add-property" class="button secondary">Add property</button>
+          <button id="refresh-all" class="button primary">Refresh portfolio</button>
+          <button id="more-button" class="icon-button" aria-label="Workspace actions">•••</button>
+          <div id="more-menu" class="menu hidden"><button id="export-csv">Export current people to CSV</button><button id="export-backup">Export local backup</button><button id="import-backup">Restore from backup</button><button id="clear-data" class="danger-text">Delete local workspace</button></div>
+          <input id="backup-file" type="file" accept="application/json" hidden>
+        </div>
+      </header>
+      <div id="notice" class="notice hidden" role="status"></div>
+
+      <section id="overview-view" class="view active">
+        <div id="empty-state" class="empty-state hidden">
+          <p class="folio">FIRST RUN</p><div class="empty-icon">LO</div><h2>Set up your licensing desk</h2>
+          <p>Add the properties you actively manage. One-time research stays separate in Quick lookup.</p>
+          <div class="empty-actions"><button id="start-crazy-moose" class="button primary">Start with Crazy Moose – Mountlake Terrace</button><button id="empty-add" class="button secondary">Find another property</button></div>
+        </div>
+        <div id="overview-content">
+          <section class="briefing-intro"><div><p class="eyebrow">TODAY'S DESK</p><h2>Portfolio briefing</h2><p>Prioritized from the latest accepted public WSGC responses.</p></div><p class="scope-note">Observations are not employment or enforcement conclusions.</p></section>
+          <div id="stats" class="stats"></div>
+          <div class="grid-two">
+            <section class="panel attention-panel"><div class="panel-head"><div><p class="section-number">01 / REVIEW</p><h2>Attention queue</h2><p>Expiring, expired, pending, or unfamiliar records.</p></div><button class="text-button" data-go="people" data-filter="attention">Open queue</button></div><div id="attention-list" class="compact-list"></div></section>
+            <section class="panel"><div class="panel-head"><div><p class="section-number">02 / SCOPE</p><h2>Managed properties</h2><p>Latest accepted roster and retrieval condition.</p></div><button class="text-button" data-go="properties">Manage</button></div><div id="property-summary" class="compact-list"></div></section>
+          </div>
+          <section class="panel"><div class="panel-head"><div><p class="section-number">03 / RECENT</p><h2>Latest people observed</h2><p>A cross-property working view—not a claim of current employment.</p></div><button class="text-button" data-go="people">Open people register</button></div><div id="recent-people"></div></section>
+        </div>
+      </section>
+
+      <section id="people-view" class="view">
+        <div class="register-heading"><div><p class="eyebrow">PERSON-CENTRIC REGISTER</p><h2>One person, every returned record</h2></div><p>License number is never used as person identity.</p></div>
+        <div class="toolbar"><label class="search-box"><span>⌕</span><input id="people-search" type="search" placeholder="Search name, license or property"></label><select id="property-filter" aria-label="Filter by property"><option value="">All managed properties</option></select><select id="status-filter" aria-label="Filter by status"><option value="current" selected>Current observations</option><option value="attention">Needs attention</option><option value="expiring90">Expires within 90 days</option><option value="active">Active shown</option><option value="pending">Pending shown</option><option value="historical">Historical / inactive shown</option><option value="">All returned people</option></select><span id="people-result-count" class="result-count"></span></div>
+        <div class="table-wrap"><table><thead><tr><th data-sort="fullName">Person</th><th>Property observation</th><th>Returned records</th><th data-sort="nearestDays">Nearest expiration</th><th>Review state</th></tr></thead><tbody id="people-table"></tbody></table></div>
+      </section>
+
+      <section id="properties-view" class="view"><div class="register-heading"><div><p class="eyebrow">MANAGED SCOPE</p><h2>Property workspaces</h2></div><p>Each property retains its own accepted snapshots.</p></div><div id="properties-grid" class="property-grid"></div></section>
+      <section id="changes-view" class="view"><div class="register-heading"><div><p class="eyebrow">OBSERVATION LOG</p><h2>What the returned data changed</h2></div><p>Differences are evidence for review, not conclusions.</p></div><div class="explain"><strong>Read literally:</strong> “Not returned” means the latest public response did not contain the previous record. It does not establish termination, revocation, inactivity, or wrongdoing.</div><div id="changes-list" class="change-list"></div></section>
+    </main>
+  </div>
+
+  <dialog id="property-dialog"><form class="dialog-shell"><button id="property-dialog-close" type="button" class="dialog-close" aria-label="Close">×</button><p class="kicker">PUBLIC WSGC ORGANIZATION SEARCH</p><h2 id="property-dialog-title">Find a managed property</h2><p id="property-dialog-copy" class="dialog-copy">Search first. Adding a result to the managed portfolio is a separate action.</p><div class="form-grid"><label>Organization name<input name="organization_name" autocomplete="off"></label><label>Trade name<input name="tradename" autocomplete="off"></label><label>City<input name="gmb_city" autocomplete="off"></label><label>County<input name="county" autocomplete="off"></label><label>Entity<input name="entity" autocomplete="off"></label><label>License type<input name="licensetype" autocomplete="off"></label></div><div class="dialog-actions"><button id="property-dialog-cancel" type="button" class="button secondary">Cancel</button><button id="search-submit" type="submit" class="button primary">Search public records</button></div><div id="search-status" class="search-status"></div><div id="search-results" class="search-results"></div></form></dialog>
+  <dialog id="person-dialog"><div class="dialog-shell detail-dialog"><button id="person-close" class="dialog-close" aria-label="Close">×</button><div id="person-detail"></div></div></dialog>
+  <dialog id="quick-dialog"><div class="dialog-shell quick-dialog"><button id="quick-close" class="dialog-close" aria-label="Close">×</button><div id="quick-detail"></div></div></dialog>
+  <dialog id="confirm-dialog"><form method="dialog" class="dialog-shell confirm"><h2 id="confirm-title">Confirm</h2><p id="confirm-copy"></p><div class="dialog-actions"><button value="cancel" class="button secondary">Cancel</button><button value="confirm" class="button danger">Delete</button></div></form></dialog>
+  <script src="shared/model.js"></script><script src="db.js"></script><script src="app.js"></script>
+</body>
+</html>
