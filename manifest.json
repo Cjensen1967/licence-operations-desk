@@ -5,7 +5,6 @@
   "description": "A local, attention-first workspace for managing public Washington gambling-license records.",
   "action": {
     "default_title": "Open Licence Operations Desk",
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "32": "icons/icon32.png",
