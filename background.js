@@ -199,6 +199,10 @@ function publicError(error) {
   };
 }
 
+chrome.action.onClicked.addListener(() => {
+  chrome.tabs.create({ url: chrome.runtime.getURL("app.html") });
+});
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message?.type) return false;
   let task;
