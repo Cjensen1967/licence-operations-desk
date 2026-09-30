@@ -32,7 +32,6 @@ function bindEvents() {
   $$('[data-go]').forEach((button) => button.addEventListener("click", () => { if (button.dataset.filter) $("#status-filter").value = button.dataset.filter; switchView(button.dataset.go); }));
   $("#add-property").addEventListener("click", () => openPropertyDialog("managed")); $("#empty-add").addEventListener("click", () => openPropertyDialog("managed"));
   $("#quick-lookup").addEventListener("click", () => openPropertyDialog("quick"));
-  $("#start-crazy-moose").addEventListener("click", () => addProperty({ accountId: "9fd7b322-c545-f111-88b4-001dd8062c20", name: "Crazy Moose Casino – Mountlake Terrace", city: "Mountlake Terrace", county: "Snohomish" }));
   $("#refresh-all").addEventListener("click", refreshAll);
   $("#more-button").addEventListener("click", () => $("#more-menu").classList.toggle("hidden"));
   document.addEventListener("click", (event) => { if (!event.target.closest(".top-actions")) $("#more-menu").classList.add("hidden"); });

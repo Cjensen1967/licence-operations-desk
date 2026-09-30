@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Licence Operations Desk",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "A local, attention-first workspace for managing public Washington gambling-license records.",
   "action": {
     "default_title": "Open Licence Operations Desk",
