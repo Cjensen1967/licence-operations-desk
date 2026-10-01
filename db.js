@@ -46,6 +46,7 @@ const DB = {
   },
   putProperty(property) { return transaction("properties", "readwrite", (store) => store.put(property)); },
   deleteProperty(accountId) { return transaction("properties", "readwrite", (store) => store.delete(accountId)); },
+  clearProperties() { return transaction("properties", "readwrite", (store) => store.clear()); },
   async getSnapshots(accountId) {
     const db = await openDb();
     try {
@@ -59,6 +60,14 @@ const DB = {
     const values = await this.getSnapshots(snapshot.accountId);
     for (const old of values.slice(12)) await transaction("snapshots", "readwrite", (store) => store.delete(old.id));
   },
+  async getSetting(key, fallback = null) {
+    const db = await openDb();
+    try {
+      const record = await requestValue(db.transaction("settings").objectStore("settings").get(key));
+      return record?.value ?? fallback;
+    } finally { db.close(); }
+  },
+  putSetting(key, value) { return transaction("settings", "readwrite", (store) => store.put({ key, value })); },
   async clearAll() {
     for (const name of ["properties", "snapshots", "settings"]) await transaction(name, "readwrite", (store) => store.clear());
   },

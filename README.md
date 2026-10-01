@@ -8,7 +8,17 @@ The extension is designed as a local, attention-first workspace for licensing an
 
 Current development version: **1.0.4**
 
-Version 1.0.4 is the baseline for planning the next release. See [ROADMAP.md](ROADMAP.md) for proposed future work.
+Version 1.0.4 remains the published baseline. The approved v1.0.5 work is being developed and reviewed without changing the manifest version prematurely. See [ROADMAP.md](ROADMAP.md).
+
+The current development branch adds:
+
+- local **My Staff** flags, departments, and tags that survive roster refreshes;
+- property dashboards and property-specific review workspaces;
+- settings-only JSON export/import with merge and replace choices;
+- full-backup support for workspace labels; and
+- responsive stacked records and touch-friendly dialogs for narrow screens.
+
+Manager labels are stored locally and displayed separately from public WSGC facts. They are organizational aids, not employment, disciplinary, enforcement, or legal conclusions.
 
 ## Design principles
 
@@ -26,6 +36,13 @@ See [PRIVACY.md](PRIVACY.md) for information about data processing and storage.
 ## Development
 
 AI-assisted and human development should follow [AGENTS.md](AGENTS.md). Proposed changes should be discussed and documented in [ROADMAP.md](ROADMAP.md) before implementation when practical.
+
+Run the local regression checks with:
+
+```sh
+node --test tests/*.test.js
+node --check app.js background.js db.js shared/model.js shared/workspace.js
+```
 
 ## Independence
 
