@@ -1,7 +1,8 @@
 "use strict";
 
 const { normalizeOrganization, normalizeIndividualLicense, markRenewedRecords, buildPeople, compareSnapshots, summarize } = WSGCModel;
-const state = { properties: [], snapshots: new Map(), histories: new Map(), people: [], changes: [], view: "overview", sort: "fullName", sortDirection: 1, searchMode: "managed" };
+const { DEFAULT_DEPARTMENTS, normalizeSettings, mergeSettings, createSettingsBackup, parseSettingsBackup } = WorkspaceSettings;
+const state = { properties: [], snapshots: new Map(), histories: new Map(), people: [], changes: [], workspace: normalizeSettings(), view: "overview", sort: "fullName", sortDirection: 1, searchMode: "managed", pendingSettingsImport: null };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[c]);
@@ -10,6 +11,7 @@ const formatTime = (value) => { const date = new Date(value); return Number.isNa
 
 async function initialize() {
   state.properties = await DB.getProperties();
+  state.workspace = normalizeSettings(await DB.getSetting("workspace", {}));
   await reloadSnapshots();
   bindEvents();
   render();
@@ -35,14 +37,19 @@ function bindEvents() {
   $("#refresh-all").addEventListener("click", refreshAll);
   $("#more-button").addEventListener("click", () => $("#more-menu").classList.toggle("hidden"));
   document.addEventListener("click", (event) => { if (!event.target.closest(".top-actions")) $("#more-menu").classList.add("hidden"); });
-  $("#people-search").addEventListener("input", renderPeople); $("#property-filter").addEventListener("change", renderPeople); $("#status-filter").addEventListener("change", renderPeople);
+  $("#people-search").addEventListener("input", renderPeople); $("#property-filter").addEventListener("change", renderPeople); $("#staff-filter").addEventListener("change", renderPeople); $("#status-filter").addEventListener("change", renderPeople);
+  $("#open-my-staff").addEventListener("click", () => { $("#staff-filter").value = "starred"; switchView("people"); });
   $("#property-dialog form").addEventListener("submit", (event) => { event.preventDefault(); performSearch(Object.fromEntries(new FormData(event.currentTarget).entries())); });
   $("#property-dialog-close").addEventListener("click", () => $("#property-dialog").close());
   $("#property-dialog-cancel").addEventListener("click", () => $("#property-dialog").close());
   $("#person-close").addEventListener("click", () => $("#person-dialog").close());
   $("#quick-close").addEventListener("click", () => $("#quick-dialog").close());
+  $("#property-workspace-close").addEventListener("click", () => $("#property-workspace-dialog").close());
   $("#export-csv").addEventListener("click", exportCsv); $("#export-backup").addEventListener("click", exportBackup); $("#import-backup").addEventListener("click", () => $("#backup-file").click());
   $("#backup-file").addEventListener("change", importBackup); $("#clear-data").addEventListener("click", clearData);
+  $("#export-settings").addEventListener("click", exportSettings); $("#import-settings").addEventListener("click", () => $("#settings-file").click());
+  $("#settings-file").addEventListener("change", prepareSettingsImport); $("#settings-import-cancel").addEventListener("click", () => $("#settings-import-dialog").close());
+  $("#settings-import-merge").addEventListener("click", () => applySettingsImport("merge")); $("#settings-import-replace").addEventListener("click", () => applySettingsImport("replace"));
   $$('th[data-sort]').forEach((th) => th.addEventListener("click", () => { state.sortDirection = state.sort === th.dataset.sort ? -state.sortDirection : 1; state.sort = th.dataset.sort; renderPeople(); }));
 }
 
@@ -61,7 +68,16 @@ function render() {
   $("#stats").innerHTML = [
     ["Managed properties", summary.properties], ["Current people shown", summary.people], ["All returned records", summary.records], ["Current assignments", summary.assignments], ["Expiring ≤90 days", summary.expiring90], ["Needs attention", summary.attention],
   ].map(([label, value]) => `<div class="stat ${label === "Needs attention" ? "attention" : ""}"><span>${label}</span><strong>${value}</strong></div>`).join("");
-  renderAttention(); renderPropertySummary(); renderRecent(); renderFilters(); renderPeople(); renderProperties(); renderChanges();
+  renderAttention(); renderPropertySummary(); renderMyStaff(); renderRecent(); renderFilters(); renderPeople(); renderProperties(); renderChanges();
+}
+
+function personPreference(personOrKey) { return state.workspace.people[typeof personOrKey === "string" ? personOrKey : personOrKey.key] || {}; }
+function starredPeople() { return state.people.filter((person) => personPreference(person).starred); }
+
+function renderMyStaff() {
+  const people = starredPeople();
+  $("#my-staff-list").innerHTML = people.length ? people.slice(0, 8).map((person) => { const preference = personPreference(person); return `<button class="staff-card person-link" data-person="${escapeHtml(person.key)}"><span class="staff-star" aria-hidden="true">★</span><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || "No local labels")}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`; }).join("") : `<div class="empty-inline"><strong>No one is flagged yet.</strong><span>Open a person and choose “Add to My Staff.”</span></div>`;
+  bindPersonLinks();
 }
 
 function renderAttention() {
@@ -76,7 +92,7 @@ function renderPropertySummary() {
 
 function renderRecent() {
   const rows = state.people.filter((person) => person.bucket !== "historical").slice(0, 10);
-  $("#recent-people").innerHTML = rows.length ? `<table><thead><tr><th>Person</th><th>Property standing</th><th>License records</th><th>Overall</th></tr></thead><tbody>${rows.map((person) => `<tr class="person-link" data-person="${escapeHtml(person.key)}"><td><strong>${escapeHtml(person.fullName)}</strong></td><td>${propertyStandingChips(person)}</td><td>${person.licenses.length}</td><td><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></td></tr>`).join("")}</tbody></table>` : `<div class="compact-row"><small>Refresh a property to load its roster.</small></div>`;
+  $("#recent-people").innerHTML = rows.length ? `<table><thead><tr><th>Person</th><th>Property standing</th><th>License records</th><th>Overall</th></tr></thead><tbody>${rows.map((person) => `<tr class="person-link" data-person="${escapeHtml(person.key)}"><td data-label="Person"><strong>${escapeHtml(person.fullName)}</strong></td><td data-label="Property standing">${propertyStandingChips(person)}</td><td data-label="License records">${person.licenses.length}</td><td data-label="Overall"><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></td></tr>`).join("")}</tbody></table>` : `<div class="compact-row"><small>Refresh a property to load its roster.</small></div>`;
   bindPersonLinks();
 }
 
@@ -87,28 +103,76 @@ function renderFilters() {
 }
 
 function filteredPeople() {
-  const query = $("#people-search").value.trim().toLowerCase(); const propertyId = $("#property-filter").value; const status = $("#status-filter").value;
+  const query = $("#people-search").value.trim().toLowerCase(); const propertyId = $("#property-filter").value; const status = $("#status-filter").value; const staff = $("#staff-filter").value;
   return state.people.filter((person) => {
-    const haystack = [person.fullName, ...person.properties.map((p) => p.name), ...person.licenses.flatMap((l) => [l.licenseNumber, l.licenseType, l.status])].join(" ").toLowerCase();
+    const preference = personPreference(person);
+    const haystack = [person.fullName, preference.department, ...(preference.tags || []), ...person.properties.map((p) => p.name), ...person.licenses.flatMap((l) => [l.licenseNumber, l.licenseType, l.status])].join(" ").toLowerCase();
     const propertyMatch = !propertyId || person.properties.some((p) => p.accountId === propertyId);
     const currentLicenses = person.currentLicenses || person.licenses;
-    const statusMatch = !status || (status === "current" ? person.bucket !== "historical" : status === "attention" ? ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket) : status === "expiring90" ? currentLicenses.some((l) => ["expiring30", "expiring60", "expiring90"].includes(l.bucket)) : status === "pending" ? person.propertyStandings.some((standing) => ["pending", "renewalPending"].includes(standing.bucket)) : status === "historical" ? person.bucket === "historical" : currentLicenses.some((l) => l.bucket === status));
-    return (!query || haystack.includes(query)) && propertyMatch && statusMatch;
+    const scopedLicenses = propertyId ? currentLicenses.filter((license) => license.propertyId === propertyId) : currentLicenses;
+    const scopedStandings = propertyId ? person.propertyStandings.filter((standing) => standing.accountId === propertyId) : person.propertyStandings;
+    const statusMatch = !status || (status === "current" ? scopedStandings.some((standing) => standing.bucket !== "historical") : status === "attention" ? scopedStandings.some((standing) => ["attention", "renewalPending", "expiring30", "pending"].includes(standing.bucket)) : status === "expiring90" ? scopedLicenses.some((license) => ["expiring30", "expiring60", "expiring90"].includes(license.bucket)) : status === "pending" ? scopedStandings.some((standing) => ["pending", "renewalPending"].includes(standing.bucket)) : status === "historical" ? scopedStandings.some((standing) => standing.bucket === "historical") : scopedLicenses.some((license) => license.bucket === status));
+    return (!query || haystack.includes(query)) && propertyMatch && statusMatch && (!staff || preference.starred);
   });
 }
 
 function renderPeople() {
   const people = filteredPeople().sort((a, b) => { const av = a[state.sort] ?? Number.MAX_SAFE_INTEGER; const bv = b[state.sort] ?? Number.MAX_SAFE_INTEGER; return (typeof av === "string" ? av.localeCompare(bv) : av - bv) * state.sortDirection; });
   $("#people-result-count").textContent = `${people.length} ${people.length === 1 ? "person" : "people"}`;
-  $("#people-table").innerHTML = people.map((person) => `<tr data-person="${escapeHtml(person.key)}"><td class="person-cell"><strong>${escapeHtml(person.fullName)}</strong><small class="record-id">${person.identity === "name_fallback" ? "Grouped by name; contact ID unavailable" : escapeHtml(person.contactId)}</small></td><td><div class="property-standings">${propertyStandingChips(person)}</div></td><td class="record-count"><strong>${person.licenses.length}</strong><small>${escapeHtml([...new Set(person.licenses.map((l) => l.licenseType).filter(Boolean))].join(", "))}</small></td><td class="date-cell"><strong>${formatDate(person.nearestExpiration)}</strong><small>${person.nearestDays === null ? "No date" : person.nearestDays < 0 ? `${Math.abs(person.nearestDays)} days ago` : `${person.nearestDays} days`}</small></td><td><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></td></tr>`).join("");
+  $("#people-table").innerHTML = people.map((person) => { const preference = personPreference(person); return `<tr data-person="${escapeHtml(person.key)}"><td class="person-cell" data-label="Person"><div class="person-name-line"><button class="star-button ${preference.starred ? "selected" : ""}" data-star-person="${escapeHtml(person.key)}" aria-label="${preference.starred ? "Remove from" : "Add to"} My Staff" title="${preference.starred ? "Remove from" : "Add to"} My Staff">${preference.starred ? "★" : "☆"}</button><span><strong>${escapeHtml(person.fullName)}</strong><small class="record-id">${person.identity === "name_fallback" ? "Grouped by name; contact ID unavailable" : escapeHtml(person.contactId)}</small>${preference.starred ? `<small class="local-label">${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || "My Staff")}</small>` : ""}</span></div></td><td data-label="Property observation"><div class="property-standings">${propertyStandingChips(person)}</div></td><td class="record-count" data-label="Returned records"><strong>${person.licenses.length}</strong><small>${escapeHtml([...new Set(person.licenses.map((l) => l.licenseType).filter(Boolean))].join(", "))}</small></td><td class="date-cell" data-label="Nearest expiration"><strong>${formatDate(person.nearestExpiration)}</strong><small>${person.nearestDays === null ? "No date" : person.nearestDays < 0 ? `${Math.abs(person.nearestDays)} days ago` : `${person.nearestDays} days`}</small></td><td data-label="Review state"><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></td></tr>`; }).join("");
   bindPersonLinks();
+  $$('[data-star-person]').forEach((button) => button.addEventListener("click", async (event) => { event.stopPropagation(); await toggleStar(button.dataset.starPerson); }));
 }
 
 function renderProperties() {
-  $("#properties-grid").innerHTML = state.properties.map((property) => { const snap = state.snapshots.get(property.accountId); const history = state.histories.get(property.accountId) || []; return `<article class="property-card"><div class="property-card-head"><span class="badge managed">Managed</span><h3>${escapeHtml(property.name)}</h3></div><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · ") || property.accountId)}</p><div class="property-meta"><div><span>Latest records</span><strong>${snap?.individuals?.length ?? "Not loaded"}</strong></div><div><span>Last refreshed</span><strong>${snap ? formatTime(snap.retrievedAt) : "Never"}</strong></div><div><span>Saved snapshots</span><strong>${history.length}</strong></div><div><span>Last result</span><strong>${snap ? "Successful" : "Waiting"}</strong></div></div><div class="card-actions"><button class="button secondary" data-refresh="${escapeHtml(property.accountId)}">Refresh</button><button class="button quiet" data-remove="${escapeHtml(property.accountId)}">Remove</button></div></article>`; }).join("") || `<div class="empty-state"><h2>No managed properties</h2><p>Add at least one property to begin.</p></div>`;
+  $("#properties-grid").innerHTML = state.properties.map((property) => {
+    const snap = state.snapshots.get(property.accountId); const metrics = propertyMetrics(property);
+    return `<article class="property-card"><div class="property-card-head"><span class="badge managed">Managed</span><h3>${escapeHtml(property.name)}</h3></div><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · ") || property.accountId)}</p><div class="property-dashboard"><button data-property-roster="${escapeHtml(property.accountId)}"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button class="${metrics.attention ? "attention" : ""}" data-property-roster="${escapeHtml(property.accountId)}" data-status="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-property-open="${escapeHtml(property.accountId)}" data-section="changes"><span>Recent changes</span><strong>${metrics.changes}</strong></button><div><span>Last refresh</span><strong>${snap ? formatTime(snap.retrievedAt) : "Never"}</strong></div></div><div class="card-actions"><button class="button primary" data-property-open="${escapeHtml(property.accountId)}">Open property</button><button class="button secondary" data-refresh="${escapeHtml(property.accountId)}">Refresh</button><details class="card-menu"><summary aria-label="More property actions">•••</summary><div><button data-property-export="${escapeHtml(property.accountId)}">Export roster CSV</button><button data-remove="${escapeHtml(property.accountId)}" class="danger-text">Remove property</button></div></details></div></article>`;
+  }).join("") || `<div class="empty-state"><h2>No managed properties</h2><p>Add at least one property to begin.</p></div>`;
   $$('[data-refresh]').forEach((button) => button.addEventListener("click", () => refreshProperty(button.dataset.refresh, button)));
   $$('[data-remove]').forEach((button) => button.addEventListener("click", () => removeProperty(button.dataset.remove)));
+  $$('[data-property-open]').forEach((button) => button.addEventListener("click", () => openPropertyWorkspace(button.dataset.propertyOpen, button.dataset.section)));
+  $$('[data-property-roster]').forEach((button) => button.addEventListener("click", () => openPropertyPeople(button.dataset.propertyRoster, button.dataset.status || "current")));
+  $$('[data-property-export]').forEach((button) => button.addEventListener("click", () => exportPropertyCsv(button.dataset.propertyExport)));
 }
+
+function propertyPeople(property) {
+  const snapshot = state.snapshots.get(property.accountId);
+  return snapshot ? buildPeople([property], [snapshot]) : [];
+}
+
+function propertyMetrics(property) {
+  const people = propertyPeople(property); const changes = state.changes.filter((event) => event.property.accountId === property.accountId).length;
+  return {
+    people,
+    active: people.filter((person) => person.propertyStandings.some((standing) => standing.bucket === "active")).length,
+    pending: people.filter((person) => person.propertyStandings.some((standing) => ["pending", "renewalPending"].includes(standing.bucket))).length,
+    attention: people.filter((person) => ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket)).length,
+    expiring90: people.filter((person) => (person.currentLicenses || []).some((license) => ["expiring30", "expiring60", "expiring90"].includes(license.bucket))).length,
+    changes,
+  };
+}
+
+function openPropertyPeople(accountId, status = "current") {
+  $("#property-filter").value = accountId; $("#status-filter").value = status; $("#staff-filter").value = ""; switchView("people");
+}
+
+function openPropertyWorkspace(accountId, section = "") {
+  const property = state.properties.find((item) => item.accountId === accountId); if (!property) return;
+  const snapshot = state.snapshots.get(accountId); const metrics = propertyMetrics(property); const followed = metrics.people.filter((person) => personPreference(person).starred);
+  const alerts = metrics.people.filter((person) => ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket));
+  const changes = state.changes.filter((event) => event.property.accountId === accountId);
+  $("#property-workspace-detail").innerHTML = `<div class="detail-head"><p class="kicker">MANAGED PROPERTY WORKSPACE</p><h2>${escapeHtml(property.name)}</h2><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · "))} · ${snapshot ? `Refreshed ${formatTime(snapshot.retrievedAt)}` : "No roster loaded"}</p><div class="detail-actions"><button id="workspace-roster" class="button primary">View roster</button><button id="workspace-refresh" class="button secondary">Refresh</button><button id="workspace-export" class="button secondary">Export CSV</button></div></div><div class="workspace-stats"><button data-workspace-filter="current"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-workspace-filter="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-workspace-filter="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button data-workspace-filter="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-workspace-filter="expiring90"><span>Expiring ≤90 days</span><strong>${metrics.expiring90}</strong></button></div><section class="workspace-section"><div class="panel-head"><div><p class="section-number">MY STAFF</p><h3>Flagged at this property</h3></div></div>${followed.length ? followed.map(workspacePersonRow).join("") : `<div class="empty-inline">No flagged people appear in this property’s latest roster.</div>`}</section><section class="workspace-section"><div class="panel-head"><div><p class="section-number">REVIEW</p><h3>Needs attention</h3></div></div>${alerts.length ? alerts.map(workspacePersonRow).join("") : `<div class="empty-inline">Nothing currently appears in the attention queue.</div>`}</section><section id="property-workspace-changes" class="workspace-section"><div class="panel-head"><div><p class="section-number">CHANGES</p><h3>Latest observed differences</h3></div><span class="badge">${changes.length}</span></div>${changes.length ? changes.slice(0, 20).map((event) => `<div class="change-row"><span class="badge ${event.type === "not_returned" ? "attention" : ""}">${escapeHtml(event.type.replaceAll("_", " "))}</span><span><strong>${escapeHtml(event.person)}</strong><small>${escapeHtml(event.message)}</small></span><small>${escapeHtml(event.license || "")}</small></div>`).join("") : `<div class="empty-inline">A second successful refresh is needed before changes can be compared.</div>`}</section>`;
+  const dialog = $("#property-workspace-dialog"); dialog.showModal();
+  $("#workspace-roster").addEventListener("click", () => { dialog.close(); openPropertyPeople(accountId); });
+  $("#workspace-refresh").addEventListener("click", async (event) => { await refreshProperty(accountId, event.currentTarget); dialog.close(); openPropertyWorkspace(accountId); });
+  $("#workspace-export").addEventListener("click", () => exportPropertyCsv(accountId));
+  $$('[data-workspace-filter]').forEach((button) => button.addEventListener("click", () => { dialog.close(); openPropertyPeople(accountId, button.dataset.workspaceFilter); }));
+  $("#property-workspace-detail").querySelectorAll('[data-person]').forEach((row) => row.addEventListener("click", () => { dialog.close(); openPerson(row.dataset.person); }));
+  if (section === "changes") $("#property-workspace-changes").scrollIntoView({ block: "start" });
+}
+
+function workspacePersonRow(person) { const preference = personPreference(person); return `<button class="compact-row person-link" data-person="${escapeHtml(person.key)}"><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || attentionSummary(person))}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`; }
 
 function renderChanges() {
   const grouped = new Map(); for (const event of state.changes) { if (!grouped.has(event.property.accountId)) grouped.set(event.property.accountId, { property: event.property, events: [] }); grouped.get(event.property.accountId).events.push(event); }
@@ -120,7 +184,25 @@ function bindPersonLinks() { $$('[data-person]').forEach((row) => { row.onclick 
 function propertyStandingChips(person) { return person.propertyStandings.map((standing) => `<span class="property-chip ${standing.bucket}"><span>${escapeHtml(shortName(standing.name))}</span><strong>${bucketLabel(standing.bucket)}</strong></span>`).join(" "); }
 function attentionSummary(person) { return person.propertyStandings.filter((standing) => ["attention", "renewalPending", "expiring30", "pending"].includes(standing.bucket)).map((standing) => `${shortName(standing.name)}: ${bucketLabel(standing.bucket)}`).join(" · ") || person.properties.map((property) => property.name).join(" · "); }
 function licenseCard(license, outside = false) { return `<section class="license-card ${license.superseded ? "prior-record" : ""}"><div class="license-top"><div><strong>${escapeHtml(license.licenseType || "License record")}</strong><small>${escapeHtml(license.propertyName)}${outside ? " · Public individual lookup" : ""}${license.superseded ? ` · Prior record replaced by ${escapeHtml(license.supersededBy || "a renewed license")}` : ""}</small></div><span class="badge ${license.superseded ? "superseded" : license.bucket}">${license.superseded ? "Renewed" : bucketLabel(license.bucket)}</span></div><dl><div><dt>License number</dt><dd>${escapeHtml(license.licenseNumber || "—")}</dd></div><div><dt>WSGC status</dt><dd>${escapeHtml(license.status)}</dd></div><div><dt>Received date</dt><dd>${formatDate(license.receivedDate)}</dd></div><div><dt>Expiration</dt><dd>${formatDate(license.expirationDate)}</dd></div></dl></section>`; }
-function openPerson(key) { const person = state.people.find((item) => item.key === key); if (!person) return; $("#person-detail").innerHTML = `<div class="detail-head"><p class="kicker">PERSON DETAIL</p><h2>${escapeHtml(person.fullName)}</h2><p>${person.properties.length} managed ${person.properties.length === 1 ? "property" : "properties"} · ${person.licenses.length} license records</p><div class="detail-actions"><button id="full-profile" class="button secondary">Check full WSGC profile</button><small>On-demand lookup; results are not saved.</small></div></div><div class="standing-summary">${propertyStandingChips(person)}</div><div id="full-profile-results"></div><div class="section-label">Managed property records</div>${person.licenses.map((license) => licenseCard(license)).join("")}`; $("#person-dialog").showModal(); $("#full-profile").addEventListener("click", () => loadFullProfile(person)); }
+function openPerson(key) {
+  const person = state.people.find((item) => item.key === key); if (!person) return;
+  const preference = personPreference(person);
+  $("#person-detail").innerHTML = `<div class="detail-head"><p class="kicker">PERSON DETAIL</p><h2>${escapeHtml(person.fullName)}</h2><p>${person.properties.length} managed ${person.properties.length === 1 ? "property" : "properties"} · ${person.licenses.length} license records</p><div class="detail-actions"><button id="full-profile" class="button secondary">Check full WSGC profile</button><small>On-demand public lookup; results are not saved.</small></div></div><section class="local-profile"><div><p class="section-number">LOCAL WORKSPACE LABELS</p><h3>Manager view</h3><p>These labels are private to this browser and are not WSGC facts.</p></div><label class="staff-toggle"><input id="person-starred" type="checkbox" ${preference.starred ? "checked" : ""}> Add to My Staff</label><label>Department<select id="person-department"><option value="">Unassigned</option>${DEFAULT_DEPARTMENTS.map((department) => `<option value="${department}" ${preference.department === department ? "selected" : ""}>${department}</option>`).join("")}</select></label><label>Tags<input id="person-tags" value="${escapeHtml((preference.tags || []).join(", "))}" placeholder="Shift, team, location"></label><button id="save-person-labels" class="button primary">Save local labels</button></section><div class="standing-summary">${propertyStandingChips(person)}</div><div id="full-profile-results"></div><div class="section-label">MANAGED PROPERTY RECORDS · PUBLIC WSGC DATA</div>${person.licenses.map((license) => licenseCard(license)).join("")}`;
+  $("#person-dialog").showModal();
+  $("#full-profile").addEventListener("click", () => loadFullProfile(person));
+  $("#save-person-labels").addEventListener("click", async () => {
+    state.workspace.people[person.key] = { starred: $("#person-starred").checked, name: person.fullName, department: $("#person-department").value, tags: $("#person-tags").value.split(",").map((tag) => tag.trim()).filter(Boolean), updatedAt: new Date().toISOString() };
+    state.workspace = normalizeSettings(state.workspace); await DB.putSetting("workspace", state.workspace); render(); showNotice(`${person.fullName}: local labels saved.`); $("#person-dialog").close();
+  });
+}
+
+async function toggleStar(key) {
+  const person = state.people.find((item) => item.key === key); if (!person) return;
+  const current = personPreference(person);
+  state.workspace.people[key] = { ...current, name: person.fullName, starred: !current.starred, updatedAt: new Date().toISOString() };
+  state.workspace = normalizeSettings(state.workspace); await DB.putSetting("workspace", state.workspace); render();
+  showNotice(`${person.fullName} ${state.workspace.people[key].starred ? "added to" : "removed from"} My Staff.`);
+}
 
 async function loadFullProfile(person) {
   const button = $("#full-profile"); const target = $("#full-profile-results"); const sample = person.licenses[0] || {};
@@ -176,13 +258,29 @@ async function retrieveAndSave(property) { const response = await chrome.runtime
 async function removeProperty(accountId) { const property = state.properties.find((p) => p.accountId === accountId); if (!property) return; const accepted = await confirmAction("Remove property?", `${property.name} will be removed from this workspace. Its saved snapshots will remain available if you add it again.`, "Remove"); if (!accepted) return; await DB.deleteProperty(accountId); state.properties = state.properties.filter((p) => p.accountId !== accountId); await reloadSnapshots(); render(); }
 function confirmAction(title, copy, action = "Delete") { const dialog = $("#confirm-dialog"); $("#confirm-title").textContent = title; $("#confirm-copy").textContent = copy; dialog.querySelector('.danger').textContent = action; dialog.showModal(); return new Promise((resolve) => dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true })); }
 
-function exportCsv() { const rows = [["Person", "Contact ID", "Managed property", "Property standing", "License number", "License type", "WSGC status", "Received date", "Expiration", "Workbench record"]]; for (const person of filteredPeople()) for (const l of person.licenses) { const standing = person.propertyStandings.find((item) => item.accountId === l.propertyId); rows.push([person.fullName, person.contactId, l.propertyName, bucketLabel(standing?.bucket || l.bucket), l.licenseNumber, l.licenseType, l.status, l.receivedDate, l.expirationDate, l.superseded ? `Prior record; renewed as ${l.supersededBy || "new license"}` : "Current record"]); } download(`wsgc-roster-${new Date().toISOString().slice(0,10)}.csv`, rows.map((r) => r.map(csvCell).join(",")).join("\n"), "text/csv"); }
-async function exportBackup() { const snapshots = Object.fromEntries(await Promise.all(state.properties.map(async (p) => [p.accountId, await DB.getSnapshots(p.accountId)]))); download(`wsgc-workbench-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), properties: state.properties, snapshots }, null, 2), "application/json"); }
-async function importBackup(event) { const file = event.target.files[0]; event.target.value = ""; if (!file) return; try { const data = JSON.parse(await file.text()); if (data.version !== 1 || !Array.isArray(data.properties)) throw new Error("This is not a supported Workbench backup."); for (const property of data.properties) await DB.putProperty(property); for (const values of Object.values(data.snapshots || {})) for (const snapshot of values) await DB.putSnapshot(snapshot); state.properties = await DB.getProperties(); await reloadSnapshots(); render(); showNotice("Backup imported successfully."); } catch (error) { showNotice(error.message, true); } }
-async function clearData() { const accepted = await confirmAction("Delete all local data?", "This permanently deletes selected properties, saved rosters, and change history from this browser. Export a backup first if you may need it."); if (!accepted) return; await DB.clearAll(); state.properties = []; await reloadSnapshots(); render(); switchView("overview"); showNotice("All local Workbench data was deleted."); }
+function csvRows(people) { const rows = [["Person", "Contact ID", "Managed property", "Property standing", "License number", "License type", "WSGC status", "Received date", "Expiration", "Workbench record", "My Staff", "Local department", "Local tags"]]; for (const person of people) for (const license of person.licenses) { const standing = person.propertyStandings.find((item) => item.accountId === license.propertyId); const preference = personPreference(person); rows.push([person.fullName, person.contactId, license.propertyName, bucketLabel(standing?.bucket || license.bucket), license.licenseNumber, license.licenseType, license.status, license.receivedDate, license.expirationDate, license.superseded ? `Prior record; renewed as ${license.supersededBy || "new license"}` : "Current record", preference.starred ? "Yes" : "No", preference.department || "", (preference.tags || []).join("; ")]); } return rows; }
+function downloadCsv(filename, people) { download(filename, csvRows(people).map((row) => row.map(csvCell).join(",")).join("\n"), "text/csv"); }
+function exportCsv() { downloadCsv(`wsgc-roster-${new Date().toISOString().slice(0,10)}.csv`, filteredPeople()); }
+function exportPropertyCsv(accountId) { const property = state.properties.find((item) => item.accountId === accountId); if (!property) return; downloadCsv(`${safeFilename(property.name)}-${new Date().toISOString().slice(0,10)}.csv`, propertyPeople(property)); }
+
+function exportSettings() { const backup = createSettingsBackup(state.properties, state.workspace); download(`licence-desk-settings-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(backup, null, 2), "application/json"); }
+async function prepareSettingsImport(event) { const file = event.target.files[0]; event.target.value = ""; if (!file) return; try { state.pendingSettingsImport = parseSettingsBackup(JSON.parse(await file.text())); const starred = Object.values(state.pendingSettingsImport.settings.people).filter((person) => person.starred).length; $("#settings-import-summary").textContent = `${state.pendingSettingsImport.properties.length} managed properties and ${starred} My Staff flags are ready to import.`; $("#settings-import-dialog").showModal(); } catch (error) { showNotice(error.message, true); } }
+async function applySettingsImport(mode) {
+  const incoming = state.pendingSettingsImport; if (!incoming) return;
+  if (mode === "replace") await DB.clearProperties();
+  for (const property of incoming.properties) await DB.putProperty(property);
+  state.workspace = mode === "merge" ? mergeSettings(state.workspace, incoming.settings) : normalizeSettings(incoming.settings);
+  await DB.putSetting("workspace", state.workspace); state.properties = await DB.getProperties(); await reloadSnapshots(); render(); $("#settings-import-dialog").close(); state.pendingSettingsImport = null;
+  showNotice(`Settings ${mode === "merge" ? "merged" : "replaced"}. No roster history or credentials were imported.`);
+}
+
+async function exportBackup() { const snapshots = Object.fromEntries(await Promise.all(state.properties.map(async (p) => [p.accountId, await DB.getSnapshots(p.accountId)]))); download(`wsgc-workbench-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), properties: state.properties, snapshots, workspace: state.workspace }, null, 2), "application/json"); }
+async function importBackup(event) { const file = event.target.files[0]; event.target.value = ""; if (!file) return; try { const data = JSON.parse(await file.text()); if (![1, 2].includes(data.version) || !Array.isArray(data.properties)) throw new Error("This is not a supported Workbench backup."); for (const property of data.properties) await DB.putProperty(property); for (const values of Object.values(data.snapshots || {})) for (const snapshot of values) await DB.putSnapshot(snapshot); if (data.workspace) { state.workspace = mergeSettings(state.workspace, data.workspace); await DB.putSetting("workspace", state.workspace); } state.properties = await DB.getProperties(); await reloadSnapshots(); render(); showNotice("Full backup imported successfully."); } catch (error) { showNotice(error.message, true); } }
+async function clearData() { const accepted = await confirmAction("Delete all local data?", "This permanently deletes selected properties, saved rosters, change history, My Staff flags, and local labels from this browser. Export a backup first if you may need it."); if (!accepted) return; await DB.clearAll(); state.properties = []; state.workspace = normalizeSettings(); await reloadSnapshots(); render(); switchView("overview"); showNotice("All local Workbench data was deleted."); }
 
 function download(filename, text, type) { const url = URL.createObjectURL(new Blob([text], { type })); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function csvCell(value) { const text = String(value ?? ""); return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; }
+function safeFilename(value) { return String(value || "property").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "property"; }
 function bucketLabel(bucket) { return ({ active: "Active", pending: "Pending", renewalPending: "Renewal pending", historical: "Historical / inactive", attention: "Attention", expiring30: "≤30 days", expiring60: "31–60 days", expiring90: "61–90 days", other: "Other" })[bucket] || bucket; }
 function shortName(name) { return name.replace(/casino|cardroom|card room/ig, "").trim() || name; }
 function showNotice(message, error = false) { const notice = $("#notice"); notice.textContent = message; notice.className = error ? "notice error" : "notice"; clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => notice.classList.add("hidden"), error ? 12000 : 5000); }

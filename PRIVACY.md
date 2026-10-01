@@ -1,6 +1,6 @@
 # Privacy Policy — Licence Operations Desk
 
-**Effective date: September 21, 2026**
+**Effective date: October 1, 2026**
 
 Licence Operations Desk helps users search, organize, compare, and report public Washington State gambling-license information in a local browser workspace.
 
@@ -12,7 +12,9 @@ Returned public records may include names, government license identifiers, organ
 
 ## Local storage
 
-Managed properties, accepted roster snapshots, retrieval outcomes, preferences, and user-restored backups are stored locally in the browser profile. Temporary search results and request-verification tokens are not intentionally persisted by the application. Exported reports and backups are saved only to locations selected by the user.
+Managed properties, accepted roster snapshots, retrieval outcomes, preferences, My Staff flags, and user-created department or tag labels are stored locally in the browser profile. Temporary search results and request-verification tokens are not intentionally persisted by the application. Exported reports and backups are saved only to locations selected by the user.
+
+The settings-only export contains managed-property selections and local workspace preferences. It intentionally excludes roster snapshots, change history, credentials, cookies, and verification tokens. Local labels are user-created organizational aids and are kept separate from public WSGC facts.
 
 ## No developer collection
 
