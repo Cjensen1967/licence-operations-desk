@@ -79,7 +79,7 @@ function render() {
   $("#empty-state").classList.toggle("hidden", !empty); $("#overview-content").classList.toggle("hidden", empty);
   const summary = summarize(state.people, state.properties);
   $("#stats").innerHTML = [
-    ["Managed properties", summary.properties], ["Current people shown", summary.people], ["All returned records", summary.records], ["Current assignments", summary.assignments], ["Expiring ≤90 days", summary.expiring90], ["Needs attention", summary.attention],
+    ["Managed properties", summary.properties], ["Current people shown", summary.people], ["Renewal pending", summary.renewalPending], ["Current assignments", summary.assignments], ["Expiring ≤10 days", summary.expiring10], ["Needs attention", summary.attention],
   ].map(([label, value]) => `<div class="stat ${label === "Needs attention" ? "attention" : ""}"><span>${label}</span><strong>${value}</strong></div>`).join("");
   renderAttention(); renderPropertySummary(); renderMyStaff(); renderRecent(); renderFilters(); renderPeople(); renderProperties(); renderChanges();
 }
@@ -96,7 +96,7 @@ function renderMyStaff() {
 }
 
 function renderAttention() {
-  const rows = state.people.filter((person) => ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket)).slice(0, 8);
+  const rows = state.people.filter((person) => ["attention", "expiring10"].includes(person.bucket)).slice(0, 8);
   $("#attention-list").innerHTML = rows.map((person) => `<button class="compact-row person-link" data-person="${escapeHtml(person.key)}"><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml(attentionSummary(person))}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`).join("");
   bindPersonLinks();
 }
@@ -126,7 +126,7 @@ function filteredPeople() {
     const currentLicenses = person.currentLicenses || person.licenses;
     const scopedLicenses = propertyId ? currentLicenses.filter((license) => license.propertyId === propertyId) : currentLicenses;
     const scopedStandings = propertyId ? person.propertyStandings.filter((standing) => standing.accountId === propertyId) : person.propertyStandings;
-    const statusMatch = !status || (status === "current" ? scopedStandings.some((standing) => standing.bucket !== "historical") : status === "attention" ? scopedStandings.some((standing) => ["attention", "renewalPending", "expiring30", "pending"].includes(standing.bucket)) : status === "expiring90" ? scopedLicenses.some((license) => ["expiring30", "expiring60", "expiring90"].includes(license.bucket)) : status === "pending" ? scopedStandings.some((standing) => ["pending", "renewalPending"].includes(standing.bucket)) : status === "historical" ? scopedStandings.some((standing) => standing.bucket === "historical") : scopedLicenses.some((license) => license.bucket === status));
+    const statusMatch = !status || (status === "current" ? scopedStandings.some((standing) => standing.bucket !== "historical") : status === "attention" ? scopedStandings.some((standing) => ["attention", "expiring10"].includes(standing.bucket)) : status === "expiring90" ? scopedLicenses.some((license) => ["approaching", "expiring10"].includes(license.bucket)) : status === "pending" ? scopedStandings.some((standing) => ["pending", "renewalPending"].includes(standing.bucket)) : status === "historical" ? scopedStandings.some((standing) => standing.bucket === "historical") : scopedLicenses.some((license) => license.bucket === status));
     return (!query || haystack.includes(query)) && propertyMatch && statusMatch && (!staff || preference.starred);
   });
 }
@@ -160,10 +160,11 @@ function propertyMetrics(property) {
   const people = propertyPeople(property); const changes = state.changes.filter((event) => event.property.accountId === property.accountId).length;
   return {
     people,
-    active: people.filter((person) => person.propertyStandings.some((standing) => standing.bucket === "active")).length,
+    active: people.filter((person) => person.propertyStandings.some((standing) => ["active", "approaching", "expiring10"].includes(standing.bucket))).length,
     pending: people.filter((person) => person.propertyStandings.some((standing) => ["pending", "renewalPending"].includes(standing.bucket))).length,
-    attention: people.filter((person) => ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket)).length,
-    expiring90: people.filter((person) => (person.currentLicenses || []).some((license) => ["expiring30", "expiring60", "expiring90"].includes(license.bucket))).length,
+    attention: people.filter((person) => ["attention", "expiring10"].includes(person.bucket)).length,
+    approaching45: people.filter((person) => (person.currentLicenses || []).some((license) => ["approaching", "expiring10"].includes(license.bucket))).length,
+    expiring10: people.filter((person) => (person.currentLicenses || []).some((license) => license.bucket === "expiring10")).length,
     changes,
   };
 }
@@ -175,7 +176,7 @@ function openPropertyPeople(accountId, status = "current") {
 function openPropertyWorkspace(accountId, section = "") {
   const property = state.properties.find((item) => item.accountId === accountId); if (!property) return;
   const snapshot = state.snapshots.get(accountId); const metrics = propertyMetrics(property); const followed = metrics.people.filter((person) => personPreference(person).starred);
-  const alerts = metrics.people.filter((person) => ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket));
+  const alerts = metrics.people.filter((person) => ["attention", "expiring10"].includes(person.bucket));
   const changes = state.changes.filter((event) => event.property.accountId === accountId);
   $("#property-workspace-detail").innerHTML = `<div class="detail-head"><p class="kicker">MANAGED PROPERTY WORKSPACE</p><h2>${escapeHtml(property.name)}</h2><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · "))} · ${snapshot ? `Refreshed ${formatTime(snapshot.retrievedAt)}` : "No roster loaded"}</p><div class="detail-actions"><button id="workspace-roster" class="button primary">View roster</button><button id="workspace-refresh" class="button secondary">Refresh</button><button id="workspace-export" class="button secondary">Export CSV</button></div></div><div class="workspace-stats"><button data-workspace-filter="current"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-workspace-filter="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-workspace-filter="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button data-workspace-filter="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-workspace-filter="expiring90"><span>Expiring ≤90 days</span><strong>${metrics.expiring90}</strong></button></div><section class="workspace-section"><div class="panel-head"><div><p class="section-number">MY STAFF</p><h3>Flagged at this property</h3></div></div>${followed.length ? followed.map(workspacePersonRow).join("") : `<div class="empty-inline">No flagged people appear in this property’s latest roster.</div>`}</section><section class="workspace-section"><div class="panel-head"><div><p class="section-number">REVIEW</p><h3>Needs attention</h3></div></div>${alerts.length ? alerts.map(workspacePersonRow).join("") : `<div class="empty-inline">Nothing currently appears in the attention queue.</div>`}</section><section id="property-workspace-changes" class="workspace-section"><div class="panel-head"><div><p class="section-number">CHANGES</p><h3>Latest observed differences</h3></div><span class="badge">${changes.length}</span></div>${changes.length ? changes.slice(0, 20).map((event) => `<div class="change-row"><span class="badge ${event.type === "not_returned" ? "attention" : ""}">${escapeHtml(event.type.replaceAll("_", " "))}</span><span><strong>${escapeHtml(event.person)}</strong><small>${escapeHtml(event.message)}</small></span><small>${escapeHtml(event.license || "")}</small></div>`).join("") : `<div class="empty-inline">A second successful refresh is needed before changes can be compared.</div>`}</section>`;
   const dialog = $("#property-workspace-dialog"); dialog.showModal();
@@ -197,7 +198,7 @@ function renderChanges() {
 
 function bindPersonLinks() { $$('[data-person]').forEach((row) => { row.onclick = () => openPerson(row.dataset.person); }); }
 function propertyStandingChips(person) { return person.propertyStandings.map((standing) => `<span class="property-chip ${standing.bucket}"><span>${escapeHtml(shortName(standing.name))}</span><strong>${bucketLabel(standing.bucket)}</strong></span>`).join(" "); }
-function attentionSummary(person) { return person.propertyStandings.filter((standing) => ["attention", "renewalPending", "expiring30", "pending"].includes(standing.bucket)).map((standing) => `${shortName(standing.name)}: ${bucketLabel(standing.bucket)}`).join(" · ") || person.properties.map((property) => property.name).join(" · "); }
+function attentionSummary(person) { return person.propertyStandings.filter((standing) => ["attention", "expiring10"].includes(standing.bucket)).map((standing) => `${shortName(standing.name)}: ${bucketLabel(standing.bucket)}`).join(" · ") || person.properties.map((property) => property.name).join(" · "); }
 function licenseCard(license, outside = false) { return `<section class="license-card ${license.superseded ? "prior-record" : ""}"><div class="license-top"><div><strong>${escapeHtml(license.licenseType || "License record")}</strong><small>${escapeHtml(license.propertyName)}${outside ? " · Public individual lookup" : ""}${license.superseded ? ` · Prior record replaced by ${escapeHtml(license.supersededBy || "a renewed license")}` : ""}</small></div><span class="badge ${license.superseded ? "superseded" : license.bucket}">${license.superseded ? "Renewed" : bucketLabel(license.bucket)}</span></div><dl><div><dt>License number</dt><dd>${escapeHtml(license.licenseNumber || "—")}</dd></div><div><dt>WSGC status</dt><dd>${escapeHtml(license.status)}</dd></div><div><dt>Received date</dt><dd>${formatDate(license.receivedDate)}</dd></div><div><dt>Expiration</dt><dd>${formatDate(license.expirationDate)}</dd></div></dl></section>`; }
 function openPerson(key) {
   const person = state.people.find((item) => item.key === key); if (!person) return;
@@ -312,7 +313,7 @@ async function clearData() { const accepted = await confirmAction("Delete all lo
 function download(filename, text, type) { const url = URL.createObjectURL(new Blob([text], { type })); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function csvCell(value) { const text = String(value ?? ""); return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; }
 function safeFilename(value) { return String(value || "property").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "property"; }
-function bucketLabel(bucket) { return ({ active: "Active", pending: "Pending", renewalPending: "Renewal pending", historical: "Historical / inactive", attention: "Attention", expiring30: "≤30 days", expiring60: "31–60 days", expiring90: "61–90 days", other: "Other" })[bucket] || bucket; }
+function bucketLabel(bucket) { return ({ active: "Active", pending: "Pending", renewalPending: "Renewal pending", historical: "Historical / inactive", attention: "Needs attention", expiring10: "Expires ≤10 days", approaching: "Expires ≤45 days" })[bucket] || bucket; }
 function shortName(name) { return name.replace(/casino|cardroom|card room/ig, "").trim() || name; }
 function showNotice(message, error = false) { const notice = $("#notice"); notice.textContent = message; notice.className = error ? "notice error" : "notice"; clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => notice.classList.add("hidden"), error ? 12000 : 5000); }
 
