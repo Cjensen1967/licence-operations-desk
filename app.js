@@ -8,6 +8,19 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[c]);
 const formatDate = (value) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? (value || "—") : new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric" }).format(date); };
 const formatTime = (value) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? "Never" : new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date); };
+const DAY_MS = 86400000;
+function freshness(retrievedAt) {
+  const time = new Date(retrievedAt).getTime();
+  if (!Number.isFinite(time)) return { key: "never", label: "Never refreshed", detail: "No saved roster" };
+  const days = Math.max(0, Math.floor((Date.now() - time) / DAY_MS));
+  if (days <= 2) return { key: "current", label: "Current", detail: days === 0 ? "Refreshed today" : `Refreshed ${days} day${days === 1 ? "" : "s"} ago` };
+  if (days <= 7) return { key: "aging", label: "Aging", detail: `Refreshed ${days} days ago` };
+  return { key: "stale", label: "Stale", detail: `Refreshed ${days} days ago` };
+}
+function missingStarredPreferences() {
+  const currentKeys = new Set(state.people.map((person) => person.key));
+  return Object.entries(state.workspace.people).filter(([key, preference]) => preference.starred && !currentKeys.has(key)).map(([key, preference]) => ({ key, ...preference }));
+}
 
 async function initialize() {
   state.properties = await DB.getProperties();
@@ -75,8 +88,10 @@ function personPreference(personOrKey) { return state.workspace.people[typeof pe
 function starredPeople() { return state.people.filter((person) => personPreference(person).starred); }
 
 function renderMyStaff() {
-  const people = starredPeople();
-  $("#my-staff-list").innerHTML = people.length ? people.slice(0, 8).map((person) => { const preference = personPreference(person); return `<button class="staff-card person-link" data-person="${escapeHtml(person.key)}"><span class="staff-star" aria-hidden="true">★</span><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || "No local labels")}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`; }).join("") : `<div class="empty-inline"><strong>No one is flagged yet.</strong><span>Open a person and choose “Add to My Staff.”</span></div>`;
+  const people = starredPeople(); const missing = missingStarredPreferences();
+  const visible = people.length ? people.slice(0, 8).map((person) => { const preference = personPreference(person); return `<button class="staff-card person-link" data-person="${escapeHtml(person.key)}"><span class="staff-star" aria-hidden="true">★</span><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || "No local labels")}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`; }).join("") : `<div class="empty-inline"><strong>No current My Staff records.</strong><span>Open a person and choose “Add to My Staff.”</span></div>`;
+  const missingNotice = missing.length ? `<div class="staff-missing"><strong>${missing.length} My Staff ${missing.length === 1 ? "person was" : "people were"} not returned in the latest managed rosters.</strong><span>This only describes the latest saved WSGC responses; it does not determine employment or licence status.</span></div>` : "";
+  $("#my-staff-list").innerHTML = visible + missingNotice;
   bindPersonLinks();
 }
 
@@ -87,7 +102,7 @@ function renderAttention() {
 }
 
 function renderPropertySummary() {
-  $("#property-summary").innerHTML = state.properties.slice(0, 7).map((property) => { const snap = state.snapshots.get(property.accountId); return `<div class="compact-row"><span><strong>${escapeHtml(property.name)}</strong><small>Managed property</small></span><span><strong>${snap?.individuals?.length ?? "—"}</strong><small>${snap ? formatTime(snap.retrievedAt) : "Not retrieved"}</small></span></div>`; }).join("");
+  $("#property-summary").innerHTML = state.properties.slice(0, 7).map((property) => { const snap = state.snapshots.get(property.accountId); const fresh = freshness(snap?.retrievedAt); return `<div class="compact-row"><span><strong>${escapeHtml(property.name)}</strong><small>Managed property</small></span><span><span class="freshness ${fresh.key}">${fresh.label}</span><small>${fresh.detail}</small>${property.lastRefreshError ? `<small class="refresh-failed">Last attempt failed</small>` : ""}</span></div>`; }).join("");
 }
 
 function renderRecent() {
@@ -126,8 +141,8 @@ function renderPeople() {
 
 function renderProperties() {
   $("#properties-grid").innerHTML = state.properties.map((property) => {
-    const snap = state.snapshots.get(property.accountId); const metrics = propertyMetrics(property);
-    return `<article class="property-card"><div class="property-card-head"><span class="badge managed">Managed</span><h3>${escapeHtml(property.name)}</h3></div><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · ") || property.accountId)}</p><div class="property-dashboard"><button data-property-roster="${escapeHtml(property.accountId)}"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button class="${metrics.attention ? "attention" : ""}" data-property-roster="${escapeHtml(property.accountId)}" data-status="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-property-open="${escapeHtml(property.accountId)}" data-section="changes"><span>Recent changes</span><strong>${metrics.changes}</strong></button><div><span>Last refresh</span><strong>${snap ? formatTime(snap.retrievedAt) : "Never"}</strong></div></div><div class="card-actions"><button class="button primary" data-property-open="${escapeHtml(property.accountId)}">Open property</button><button class="button secondary" data-refresh="${escapeHtml(property.accountId)}">Refresh</button><details class="card-menu"><summary aria-label="More property actions">•••</summary><div><button data-property-export="${escapeHtml(property.accountId)}">Export roster CSV</button><button data-remove="${escapeHtml(property.accountId)}" class="danger-text">Remove property</button></div></details></div></article>`;
+    const snap = state.snapshots.get(property.accountId); const metrics = propertyMetrics(property); const fresh = freshness(snap?.retrievedAt);
+    return `<article class="property-card"><div class="property-card-head"><span class="badge managed">Managed</span><span class="freshness ${fresh.key}">${fresh.label}</span><h3>${escapeHtml(property.name)}</h3></div><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · ") || property.accountId)}</p>${property.lastRefreshError ? `<div class="refresh-warning"><strong>Last refresh attempt failed.</strong><span>${escapeHtml(property.lastRefreshError)}</span><small>Showing the last successfully saved roster from ${snap ? formatTime(snap.retrievedAt) : "no previous refresh"}.</small></div>` : ""}<div class="property-dashboard"><button data-property-roster="${escapeHtml(property.accountId)}"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button class="${metrics.attention ? "attention" : ""}" data-property-roster="${escapeHtml(property.accountId)}" data-status="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-property-open="${escapeHtml(property.accountId)}" data-section="changes"><span>Recent changes</span><strong>${metrics.changes}</strong></button><div><span>Last successful refresh</span><strong>${snap ? formatTime(snap.retrievedAt) : "Never"}</strong></div></div><div class="card-actions"><button class="button primary" data-property-open="${escapeHtml(property.accountId)}">Open property</button><button class="button secondary" data-refresh="${escapeHtml(property.accountId)}">Refresh</button><details class="card-menu"><summary aria-label="More property actions">•••</summary><div><button data-property-export="${escapeHtml(property.accountId)}">Export roster CSV</button><button data-remove="${escapeHtml(property.accountId)}" class="danger-text">Remove property</button></div></details></div></article>`;
   }).join("") || `<div class="empty-state"><h2>No managed properties</h2><p>Add at least one property to begin.</p></div>`;
   $$('[data-refresh]').forEach((button) => button.addEventListener("click", () => refreshProperty(button.dataset.refresh, button)));
   $$('[data-remove]').forEach((button) => button.addEventListener("click", () => removeProperty(button.dataset.remove)));
@@ -253,7 +268,23 @@ async function addProperty(org) {
 }
 async function refreshAll() { const button = $("#refresh-all"); if (!state.properties.length) { openPropertyDialog(); return; } button.disabled = true; let passed = 0; const failures = []; for (let i = 0; i < state.properties.length; i += 1) { const property = state.properties[i]; button.textContent = `Refreshing ${i + 1} of ${state.properties.length}`; try { await retrieveAndSave(property); passed += 1; } catch (error) { failures.push(`${property.name}: ${error.message}`); } } await reloadSnapshots(); render(); button.disabled = false; button.textContent = "Refresh all"; if (failures.length) showNotice(`${passed} refreshed. ${failures.length} failed: ${failures.join(" | ")}`, true); else showNotice(`${passed} ${passed === 1 ? "property" : "properties"} refreshed successfully.`); }
 async function refreshProperty(accountId, button) { const property = state.properties.find((p) => p.accountId === accountId); if (!property) return; if (button) { button.disabled = true; button.textContent = "Refreshing…"; } try { await retrieveAndSave(property); await reloadSnapshots(); render(); showNotice(`${property.name}: roster refreshed successfully.`); } catch (error) { showNotice(`${property.name}: ${error.message} Existing data was kept.`, true); } finally { if (button) { button.disabled = false; button.textContent = "Refresh"; } } }
-async function retrieveAndSave(property) { const response = await chrome.runtime.sendMessage({ type: "RETRIEVE_ROSTER", accountId: property.accountId }); if (!response.ok) throw new Error(response.error); const data = response.data; const snapshot = { id: `${property.accountId}:${data.retrievedAt}`, accountId: property.accountId, propertyName: property.name, retrievedAt: data.retrievedAt, individuals: data.individuals, organizations: data.organizations }; await DB.putSnapshot(snapshot); return snapshot; }
+async function retrieveAndSave(property) {
+  const attemptedAt = new Date().toISOString();
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "RETRIEVE_ROSTER", accountId: property.accountId });
+    if (!response.ok) throw new Error(response.error);
+    const data = response.data;
+    const snapshot = { id: `${property.accountId}:${data.retrievedAt}`, accountId: property.accountId, propertyName: property.name, retrievedAt: data.retrievedAt, individuals: data.individuals, organizations: data.organizations };
+    await DB.putSnapshot(snapshot);
+    Object.assign(property, { lastRefreshAttemptAt: attemptedAt, lastRefreshError: "" });
+    await DB.putProperty(property);
+    return snapshot;
+  } catch (error) {
+    Object.assign(property, { lastRefreshAttemptAt: attemptedAt, lastRefreshError: error.message || String(error) });
+    await DB.putProperty(property);
+    throw error;
+  }
+}
 
 async function removeProperty(accountId) { const property = state.properties.find((p) => p.accountId === accountId); if (!property) return; const accepted = await confirmAction("Remove property?", `${property.name} will be removed from this workspace. Its saved snapshots will remain available if you add it again.`, "Remove"); if (!accepted) return; await DB.deleteProperty(accountId); state.properties = state.properties.filter((p) => p.accountId !== accountId); await reloadSnapshots(); render(); }
 function confirmAction(title, copy, action = "Delete") { const dialog = $("#confirm-dialog"); $("#confirm-title").textContent = title; $("#confirm-copy").textContent = copy; dialog.querySelector('.danger').textContent = action; dialog.showModal(); return new Promise((resolve) => dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true })); }
