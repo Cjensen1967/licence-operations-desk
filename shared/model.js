@@ -222,7 +222,7 @@
     const after = new Map((current.individuals || []).map((record) => [recordKey(record), normalizeLicense(record, { accountId: current.accountId, name: current.propertyName || "" })]));
     const events = [];
     for (const [key, value] of after) {
-      if (!before.has(key)) events.push({ type: "appeared", person: value.fullName, license: value.licenseNumber, message: "Appeared in the latest WSGC response" });
+      if (!before.has(key)) events.push({ type: "appeared", personKey: value.personKey, person: value.fullName, license: value.licenseNumber, message: "Appeared in the latest WSGC response" });
       else {
         const old = before.get(key);
         if (old.status !== value.status) events.push({ type: "status", person: value.fullName, license: value.licenseNumber, message: `Status changed: ${old.status || "Unknown"} → ${value.status || "Unknown"}` });
@@ -231,7 +231,7 @@
       }
     }
     for (const [key, value] of before) {
-      if (!after.has(key)) events.push({ type: "not_returned", person: value.fullName, license: value.licenseNumber, message: "Was not present in the latest WSGC response" });
+      if (!after.has(key)) events.push({ type: "not_returned", personKey: value.personKey, person: value.fullName, license: value.licenseNumber, message: "Was not present in the latest WSGC response" });
     }
     return { available: true, events };
   }
