@@ -8,6 +8,29 @@ const $$ = (selector) => [...document.querySelectorAll(selector)];
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[c]);
 const formatDate = (value) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? (value || "—") : new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric" }).format(date); };
 const formatTime = (value) => { const date = new Date(value); return Number.isNaN(date.getTime()) ? "Never" : new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }).format(date); };
+const DAY_MS = 86400000;
+function freshness(retrievedAt) {
+  const time = new Date(retrievedAt).getTime();
+  if (!Number.isFinite(time)) return { key: "never", label: "Never refreshed", detail: "No saved roster" };
+  const days = Math.max(0, Math.floor((Date.now() - time) / DAY_MS));
+  if (days <= 2) return { key: "current", label: "Current", detail: days === 0 ? "Refreshed today" : `Refreshed ${days} day${days === 1 ? "" : "s"} ago` };
+  if (days <= 7) return { key: "aging", label: "Aging", detail: `Refreshed ${days} days ago` };
+  return { key: "stale", label: "Stale", detail: `Refreshed ${days} days ago` };
+}
+function missingStarredPreferences() {
+  const currentKeys = new Set(state.people.map((person) => person.key));
+  return Object.entries(state.workspace.people).filter(([key, preference]) => preference.starred && !currentKeys.has(key)).map(([key, preference]) => ({ key, ...preference }));
+}
+function notReturnedPeople() {
+  const groups = new Map();
+  for (const event of state.changes.filter((item) => item.type === "not_returned")) {
+    const key = event.personKey || `${event.property.accountId}|${String(event.person || "").toLowerCase()}`;
+    if (!groups.has(key)) groups.set(key, { key, personKey: event.personKey || "", person: event.person, property: event.property, previousRetrievedAt: event.previousRetrievedAt || "", currentRetrievedAt: event.currentRetrievedAt || "", licenses: [] });
+    const group = groups.get(key);
+    if (event.license) group.licenses.push(event.license);
+  }
+  return [...groups.values()];
+}
 
 async function initialize() {
   state.properties = await DB.getProperties();
@@ -24,7 +47,7 @@ async function reloadSnapshots() {
     state.histories.set(property.accountId, history);
     if (history[0]) state.snapshots.set(property.accountId, history[0]);
     const comparison = compareSnapshots(history[1], history[0]);
-    if (comparison.available) state.changes.push(...comparison.events.map((event) => ({ ...event, property })));
+    if (comparison.available) state.changes.push(...comparison.events.map((event) => ({ ...event, property, previousRetrievedAt: history[1]?.retrievedAt || "", currentRetrievedAt: history[0]?.retrievedAt || "" })));
   }
   state.people = buildPeople(state.properties, [...state.snapshots.values()]);
 }
@@ -35,6 +58,7 @@ function bindEvents() {
   $("#add-property").addEventListener("click", () => openPropertyDialog("managed")); $("#empty-add").addEventListener("click", () => openPropertyDialog("managed"));
   $("#quick-lookup").addEventListener("click", () => openPropertyDialog("quick"));
   $("#refresh-all").addEventListener("click", refreshAll);
+  $("#open-not-returned").addEventListener("click", () => switchView("changes"));
   $("#more-button").addEventListener("click", () => $("#more-menu").classList.toggle("hidden"));
   document.addEventListener("click", (event) => { if (!event.target.closest(".top-actions")) $("#more-menu").classList.add("hidden"); });
   $("#people-search").addEventListener("input", renderPeople); $("#property-filter").addEventListener("change", renderPeople); $("#staff-filter").addEventListener("change", renderPeople); $("#status-filter").addEventListener("change", renderPeople);
@@ -64,30 +88,41 @@ function switchView(view) {
 function render() {
   const empty = state.properties.length === 0;
   $("#empty-state").classList.toggle("hidden", !empty); $("#overview-content").classList.toggle("hidden", empty);
-  const summary = summarize(state.people, state.properties);
+  const summary = summarize(state.people, state.properties); const notReturned = notReturnedPeople();
   $("#stats").innerHTML = [
-    ["Managed properties", summary.properties], ["Current people shown", summary.people], ["All returned records", summary.records], ["Current assignments", summary.assignments], ["Expiring ≤90 days", summary.expiring90], ["Needs attention", summary.attention],
-  ].map(([label, value]) => `<div class="stat ${label === "Needs attention" ? "attention" : ""}"><span>${label}</span><strong>${value}</strong></div>`).join("");
-  renderAttention(); renderPropertySummary(); renderMyStaff(); renderRecent(); renderFilters(); renderPeople(); renderProperties(); renderChanges();
+    ["Managed properties", summary.properties], ["Current people shown", summary.people], ["Renewal pending", summary.renewalPending], ["Not returned", notReturned.length], ["Expiring ≤10 days", summary.expiring10], ["Needs attention", summary.attention],
+  ].map(([label, value]) => `<div class="stat ${label === "Needs attention" ? "attention" : label === "Not returned" ? "change" : ""}"><span>${label}</span><strong>${value}</strong></div>`).join("");
+  renderAttention(); renderPropertySummary(); renderNotReturned(); renderMyStaff(); renderRecent(); renderFilters(); renderPeople(); renderProperties(); renderChanges();
 }
 
 function personPreference(personOrKey) { return state.workspace.people[typeof personOrKey === "string" ? personOrKey : personOrKey.key] || {}; }
 function starredPeople() { return state.people.filter((person) => personPreference(person).starred); }
 
 function renderMyStaff() {
-  const people = starredPeople();
-  $("#my-staff-list").innerHTML = people.length ? people.slice(0, 8).map((person) => { const preference = personPreference(person); return `<button class="staff-card person-link" data-person="${escapeHtml(person.key)}"><span class="staff-star" aria-hidden="true">★</span><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || "No local labels")}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`; }).join("") : `<div class="empty-inline"><strong>No one is flagged yet.</strong><span>Open a person and choose “Add to My Staff.”</span></div>`;
+  const people = starredPeople(); const missing = missingStarredPreferences();
+  const visible = people.length ? people.slice(0, 8).map((person) => { const preference = personPreference(person); return `<button class="staff-card person-link" data-person="${escapeHtml(person.key)}"><span class="staff-star" aria-hidden="true">★</span><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || "No local labels")}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`; }).join("") : `<div class="empty-inline"><strong>No current My Staff records.</strong><span>Open a person and choose “Add to My Staff.”</span></div>`;
+  const missingNotice = missing.length ? `<div class="staff-missing"><strong>${missing.length} My Staff ${missing.length === 1 ? "person was" : "people were"} not returned in the latest managed rosters.</strong><span>This only describes the latest saved WSGC responses; it does not determine employment or licence status.</span></div>` : "";
+  $("#my-staff-list").innerHTML = visible + missingNotice;
   bindPersonLinks();
 }
 
 function renderAttention() {
-  const rows = state.people.filter((person) => ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket)).slice(0, 8);
-  $("#attention-list").innerHTML = rows.map((person) => `<button class="compact-row person-link" data-person="${escapeHtml(person.key)}"><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml(attentionSummary(person))}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`).join("");
+  const rows = state.people.filter((person) => ["attention", "expiring10"].includes(person.bucket)).slice(0, 8);
+  $("#attention-list").innerHTML = rows.length ? rows.map((person) => `<button class="compact-row person-link" data-person="${escapeHtml(person.key)}"><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml(attentionSummary(person))}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`).join("") : `<div class="empty-inline">No licence exceptions currently require attention.</div>`;
   bindPersonLinks();
 }
 
+function renderNotReturned() {
+  const rows = notReturnedPeople();
+  $("#not-returned-list").innerHTML = rows.length ? rows.slice(0, 8).map((row) => {
+    const preference = row.personKey ? personPreference(row.personKey) : {};
+    const licenceCopy = [...new Set(row.licenses)].filter(Boolean).join(", ");
+    return `<div class="compact-row roster-change-row"><span><strong>${preference.starred ? '<span class="staff-star" aria-label="My Staff">★</span> ' : ""}${escapeHtml(row.person)}</strong><small>${escapeHtml(row.property.name)}${licenceCopy ? ` · ${escapeHtml(licenceCopy)}` : ""}</small></span><span><span class="badge not-returned">Not returned</span><small>${row.currentRetrievedAt ? `Latest roster ${formatTime(row.currentRetrievedAt)}` : "Latest roster"}</small></span></div>`;
+  }).join("") : `<div class="empty-inline">No people disappeared between the two latest accepted property rosters.</div>`;
+}
+
 function renderPropertySummary() {
-  $("#property-summary").innerHTML = state.properties.slice(0, 7).map((property) => { const snap = state.snapshots.get(property.accountId); return `<div class="compact-row"><span><strong>${escapeHtml(property.name)}</strong><small>Managed property</small></span><span><strong>${snap?.individuals?.length ?? "—"}</strong><small>${snap ? formatTime(snap.retrievedAt) : "Not retrieved"}</small></span></div>`; }).join("");
+  $("#property-summary").innerHTML = state.properties.slice(0, 7).map((property) => { const snap = state.snapshots.get(property.accountId); const fresh = freshness(snap?.retrievedAt); return `<div class="compact-row"><span><strong>${escapeHtml(property.name)}</strong><small>Managed property</small></span><span><span class="freshness ${fresh.key}">${fresh.label}</span><small>${fresh.detail}</small>${property.lastRefreshError ? `<small class="refresh-failed">Last attempt failed</small>` : ""}</span></div>`; }).join("");
 }
 
 function renderRecent() {
@@ -111,7 +146,7 @@ function filteredPeople() {
     const currentLicenses = person.currentLicenses || person.licenses;
     const scopedLicenses = propertyId ? currentLicenses.filter((license) => license.propertyId === propertyId) : currentLicenses;
     const scopedStandings = propertyId ? person.propertyStandings.filter((standing) => standing.accountId === propertyId) : person.propertyStandings;
-    const statusMatch = !status || (status === "current" ? scopedStandings.some((standing) => standing.bucket !== "historical") : status === "attention" ? scopedStandings.some((standing) => ["attention", "renewalPending", "expiring30", "pending"].includes(standing.bucket)) : status === "expiring90" ? scopedLicenses.some((license) => ["expiring30", "expiring60", "expiring90"].includes(license.bucket)) : status === "pending" ? scopedStandings.some((standing) => ["pending", "renewalPending"].includes(standing.bucket)) : status === "historical" ? scopedStandings.some((standing) => standing.bucket === "historical") : scopedLicenses.some((license) => license.bucket === status));
+    const statusMatch = !status || (status === "current" ? scopedStandings.some((standing) => standing.bucket !== "historical") : status === "attention" ? scopedStandings.some((standing) => ["attention", "expiring10"].includes(standing.bucket)) : status === "expiring45" ? scopedLicenses.some((license) => ["approaching", "expiring10"].includes(license.bucket)) : status === "expiring10" ? scopedLicenses.some((license) => license.bucket === "expiring10") : status === "pending" ? scopedStandings.some((standing) => ["pending", "renewalPending"].includes(standing.bucket)) : status === "historical" ? scopedStandings.some((standing) => standing.bucket === "historical") : scopedLicenses.some((license) => license.bucket === status));
     return (!query || haystack.includes(query)) && propertyMatch && statusMatch && (!staff || preference.starred);
   });
 }
@@ -126,8 +161,8 @@ function renderPeople() {
 
 function renderProperties() {
   $("#properties-grid").innerHTML = state.properties.map((property) => {
-    const snap = state.snapshots.get(property.accountId); const metrics = propertyMetrics(property);
-    return `<article class="property-card"><div class="property-card-head"><span class="badge managed">Managed</span><h3>${escapeHtml(property.name)}</h3></div><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · ") || property.accountId)}</p><div class="property-dashboard"><button data-property-roster="${escapeHtml(property.accountId)}"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button class="${metrics.attention ? "attention" : ""}" data-property-roster="${escapeHtml(property.accountId)}" data-status="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-property-open="${escapeHtml(property.accountId)}" data-section="changes"><span>Recent changes</span><strong>${metrics.changes}</strong></button><div><span>Last refresh</span><strong>${snap ? formatTime(snap.retrievedAt) : "Never"}</strong></div></div><div class="card-actions"><button class="button primary" data-property-open="${escapeHtml(property.accountId)}">Open property</button><button class="button secondary" data-refresh="${escapeHtml(property.accountId)}">Refresh</button><details class="card-menu"><summary aria-label="More property actions">•••</summary><div><button data-property-export="${escapeHtml(property.accountId)}">Export roster CSV</button><button data-remove="${escapeHtml(property.accountId)}" class="danger-text">Remove property</button></div></details></div></article>`;
+    const snap = state.snapshots.get(property.accountId); const metrics = propertyMetrics(property); const fresh = freshness(snap?.retrievedAt);
+    return `<article class="property-card"><div class="property-card-head"><span class="badge managed">Managed</span><span class="freshness ${fresh.key}">${fresh.label}</span><h3>${escapeHtml(property.name)}</h3></div><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · ") || property.accountId)}</p>${property.lastRefreshError ? `<div class="refresh-warning"><strong>Last refresh attempt failed.</strong><span>${escapeHtml(property.lastRefreshError)}</span><small>Showing the last successfully saved roster from ${snap ? formatTime(snap.retrievedAt) : "no previous refresh"}.</small></div>` : ""}<div class="property-dashboard"><button data-property-roster="${escapeHtml(property.accountId)}"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button class="${metrics.attention ? "attention" : ""}" data-property-roster="${escapeHtml(property.accountId)}" data-status="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-property-open="${escapeHtml(property.accountId)}" data-section="changes"><span>Recent changes</span><strong>${metrics.changes}</strong></button><div><span>Last successful refresh</span><strong>${snap ? formatTime(snap.retrievedAt) : "Never"}</strong></div></div><div class="card-actions"><button class="button primary" data-property-open="${escapeHtml(property.accountId)}">Open property</button><button class="button secondary" data-refresh="${escapeHtml(property.accountId)}">Refresh</button><details class="card-menu"><summary aria-label="More property actions">•••</summary><div><button data-property-export="${escapeHtml(property.accountId)}">Export roster CSV</button><button data-remove="${escapeHtml(property.accountId)}" class="danger-text">Remove property</button></div></details></div></article>`;
   }).join("") || `<div class="empty-state"><h2>No managed properties</h2><p>Add at least one property to begin.</p></div>`;
   $$('[data-refresh]').forEach((button) => button.addEventListener("click", () => refreshProperty(button.dataset.refresh, button)));
   $$('[data-remove]').forEach((button) => button.addEventListener("click", () => removeProperty(button.dataset.remove)));
@@ -145,10 +180,11 @@ function propertyMetrics(property) {
   const people = propertyPeople(property); const changes = state.changes.filter((event) => event.property.accountId === property.accountId).length;
   return {
     people,
-    active: people.filter((person) => person.propertyStandings.some((standing) => standing.bucket === "active")).length,
+    active: people.filter((person) => person.propertyStandings.some((standing) => ["active", "approaching", "expiring10"].includes(standing.bucket))).length,
     pending: people.filter((person) => person.propertyStandings.some((standing) => ["pending", "renewalPending"].includes(standing.bucket))).length,
-    attention: people.filter((person) => ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket)).length,
-    expiring90: people.filter((person) => (person.currentLicenses || []).some((license) => ["expiring30", "expiring60", "expiring90"].includes(license.bucket))).length,
+    attention: people.filter((person) => ["attention", "expiring10"].includes(person.bucket)).length,
+    approaching45: people.filter((person) => (person.currentLicenses || []).some((license) => ["approaching", "expiring10"].includes(license.bucket))).length,
+    expiring10: people.filter((person) => (person.currentLicenses || []).some((license) => license.bucket === "expiring10")).length,
     changes,
   };
 }
@@ -160,9 +196,9 @@ function openPropertyPeople(accountId, status = "current") {
 function openPropertyWorkspace(accountId, section = "") {
   const property = state.properties.find((item) => item.accountId === accountId); if (!property) return;
   const snapshot = state.snapshots.get(accountId); const metrics = propertyMetrics(property); const followed = metrics.people.filter((person) => personPreference(person).starred);
-  const alerts = metrics.people.filter((person) => ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket));
+  const alerts = metrics.people.filter((person) => ["attention", "expiring10"].includes(person.bucket));
   const changes = state.changes.filter((event) => event.property.accountId === accountId);
-  $("#property-workspace-detail").innerHTML = `<div class="detail-head"><p class="kicker">MANAGED PROPERTY WORKSPACE</p><h2>${escapeHtml(property.name)}</h2><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · "))} · ${snapshot ? `Refreshed ${formatTime(snapshot.retrievedAt)}` : "No roster loaded"}</p><div class="detail-actions"><button id="workspace-roster" class="button primary">View roster</button><button id="workspace-refresh" class="button secondary">Refresh</button><button id="workspace-export" class="button secondary">Export CSV</button></div></div><div class="workspace-stats"><button data-workspace-filter="current"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-workspace-filter="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-workspace-filter="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button data-workspace-filter="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-workspace-filter="expiring90"><span>Expiring ≤90 days</span><strong>${metrics.expiring90}</strong></button></div><section class="workspace-section"><div class="panel-head"><div><p class="section-number">MY STAFF</p><h3>Flagged at this property</h3></div></div>${followed.length ? followed.map(workspacePersonRow).join("") : `<div class="empty-inline">No flagged people appear in this property’s latest roster.</div>`}</section><section class="workspace-section"><div class="panel-head"><div><p class="section-number">REVIEW</p><h3>Needs attention</h3></div></div>${alerts.length ? alerts.map(workspacePersonRow).join("") : `<div class="empty-inline">Nothing currently appears in the attention queue.</div>`}</section><section id="property-workspace-changes" class="workspace-section"><div class="panel-head"><div><p class="section-number">CHANGES</p><h3>Latest observed differences</h3></div><span class="badge">${changes.length}</span></div>${changes.length ? changes.slice(0, 20).map((event) => `<div class="change-row"><span class="badge ${event.type === "not_returned" ? "attention" : ""}">${escapeHtml(event.type.replaceAll("_", " "))}</span><span><strong>${escapeHtml(event.person)}</strong><small>${escapeHtml(event.message)}</small></span><small>${escapeHtml(event.license || "")}</small></div>`).join("") : `<div class="empty-inline">A second successful refresh is needed before changes can be compared.</div>`}</section>`;
+  $("#property-workspace-detail").innerHTML = `<div class="detail-head"><p class="kicker">MANAGED PROPERTY WORKSPACE</p><h2>${escapeHtml(property.name)}</h2><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · "))} · ${snapshot ? `Refreshed ${formatTime(snapshot.retrievedAt)}` : "No roster loaded"}</p><div class="detail-actions"><button id="workspace-roster" class="button primary">View roster</button><button id="workspace-refresh" class="button secondary">Refresh</button><button id="workspace-export" class="button secondary">Export CSV</button></div></div><div class="workspace-stats"><button data-workspace-filter="current"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-workspace-filter="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-workspace-filter="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button data-workspace-filter="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-workspace-filter="expiring45"><span>Expiring ≤45 days</span><strong>${metrics.approaching45}</strong></button></div><section class="workspace-section"><div class="panel-head"><div><p class="section-number">MY STAFF</p><h3>Flagged at this property</h3></div></div>${followed.length ? followed.map(workspacePersonRow).join("") : `<div class="empty-inline">No flagged people appear in this property’s latest roster.</div>`}</section><section class="workspace-section"><div class="panel-head"><div><p class="section-number">REVIEW</p><h3>Needs attention</h3></div></div>${alerts.length ? alerts.map(workspacePersonRow).join("") : `<div class="empty-inline">Nothing currently appears in the attention queue.</div>`}</section><section id="property-workspace-changes" class="workspace-section"><div class="panel-head"><div><p class="section-number">CHANGES</p><h3>Latest observed differences</h3></div><span class="badge">${changes.length}</span></div>${changes.length ? changes.slice(0, 20).map((event) => `<div class="change-row"><span class="badge ${event.type === "not_returned" ? "attention" : ""}">${escapeHtml(event.type.replaceAll("_", " "))}</span><span><strong>${escapeHtml(event.person)}</strong><small>${escapeHtml(event.message)}</small></span><small>${escapeHtml(event.license || "")}</small></div>`).join("") : `<div class="empty-inline">A second successful refresh is needed before changes can be compared.</div>`}</section>`;
   const dialog = $("#property-workspace-dialog"); dialog.showModal();
   $("#workspace-roster").addEventListener("click", () => { dialog.close(); openPropertyPeople(accountId); });
   $("#workspace-refresh").addEventListener("click", async (event) => { await refreshProperty(accountId, event.currentTarget); dialog.close(); openPropertyWorkspace(accountId); });
@@ -182,7 +218,7 @@ function renderChanges() {
 
 function bindPersonLinks() { $$('[data-person]').forEach((row) => { row.onclick = () => openPerson(row.dataset.person); }); }
 function propertyStandingChips(person) { return person.propertyStandings.map((standing) => `<span class="property-chip ${standing.bucket}"><span>${escapeHtml(shortName(standing.name))}</span><strong>${bucketLabel(standing.bucket)}</strong></span>`).join(" "); }
-function attentionSummary(person) { return person.propertyStandings.filter((standing) => ["attention", "renewalPending", "expiring30", "pending"].includes(standing.bucket)).map((standing) => `${shortName(standing.name)}: ${bucketLabel(standing.bucket)}`).join(" · ") || person.properties.map((property) => property.name).join(" · "); }
+function attentionSummary(person) { return person.propertyStandings.filter((standing) => ["attention", "expiring10"].includes(standing.bucket)).map((standing) => `${shortName(standing.name)}: ${bucketLabel(standing.bucket)}`).join(" · ") || person.properties.map((property) => property.name).join(" · "); }
 function licenseCard(license, outside = false) { return `<section class="license-card ${license.superseded ? "prior-record" : ""}"><div class="license-top"><div><strong>${escapeHtml(license.licenseType || "License record")}</strong><small>${escapeHtml(license.propertyName)}${outside ? " · Public individual lookup" : ""}${license.superseded ? ` · Prior record replaced by ${escapeHtml(license.supersededBy || "a renewed license")}` : ""}</small></div><span class="badge ${license.superseded ? "superseded" : license.bucket}">${license.superseded ? "Renewed" : bucketLabel(license.bucket)}</span></div><dl><div><dt>License number</dt><dd>${escapeHtml(license.licenseNumber || "—")}</dd></div><div><dt>WSGC status</dt><dd>${escapeHtml(license.status)}</dd></div><div><dt>Received date</dt><dd>${formatDate(license.receivedDate)}</dd></div><div><dt>Expiration</dt><dd>${formatDate(license.expirationDate)}</dd></div></dl></section>`; }
 function openPerson(key) {
   const person = state.people.find((item) => item.key === key); if (!person) return;
@@ -252,8 +288,24 @@ async function addProperty(org) {
   }
 }
 async function refreshAll() { const button = $("#refresh-all"); if (!state.properties.length) { openPropertyDialog(); return; } button.disabled = true; let passed = 0; const failures = []; for (let i = 0; i < state.properties.length; i += 1) { const property = state.properties[i]; button.textContent = `Refreshing ${i + 1} of ${state.properties.length}`; try { await retrieveAndSave(property); passed += 1; } catch (error) { failures.push(`${property.name}: ${error.message}`); } } await reloadSnapshots(); render(); button.disabled = false; button.textContent = "Refresh all"; if (failures.length) showNotice(`${passed} refreshed. ${failures.length} failed: ${failures.join(" | ")}`, true); else showNotice(`${passed} ${passed === 1 ? "property" : "properties"} refreshed successfully.`); }
-async function refreshProperty(accountId, button) { const property = state.properties.find((p) => p.accountId === accountId); if (!property) return; if (button) { button.disabled = true; button.textContent = "Refreshing…"; } try { await retrieveAndSave(property); await reloadSnapshots(); render(); showNotice(`${property.name}: roster refreshed successfully.`); } catch (error) { showNotice(`${property.name}: ${error.message} Existing data was kept.`, true); } finally { if (button) { button.disabled = false; button.textContent = "Refresh"; } } }
-async function retrieveAndSave(property) { const response = await chrome.runtime.sendMessage({ type: "RETRIEVE_ROSTER", accountId: property.accountId }); if (!response.ok) throw new Error(response.error); const data = response.data; const snapshot = { id: `${property.accountId}:${data.retrievedAt}`, accountId: property.accountId, propertyName: property.name, retrievedAt: data.retrievedAt, individuals: data.individuals, organizations: data.organizations }; await DB.putSnapshot(snapshot); return snapshot; }
+async function refreshProperty(accountId, button) { const property = state.properties.find((p) => p.accountId === accountId); if (!property) return; if (button) { button.disabled = true; button.textContent = "Refreshing…"; } try { await retrieveAndSave(property); await reloadSnapshots(); render(); showNotice(`${property.name}: roster refreshed successfully.`); } catch (error) { await reloadSnapshots(); render(); showNotice(`${property.name}: ${error.message} Existing data was kept.`, true); } finally { if (button) { button.disabled = false; button.textContent = "Refresh"; } } }
+async function retrieveAndSave(property) {
+  const attemptedAt = new Date().toISOString();
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "RETRIEVE_ROSTER", accountId: property.accountId });
+    if (!response.ok) throw new Error(response.error);
+    const data = response.data;
+    const snapshot = { id: `${property.accountId}:${data.retrievedAt}`, accountId: property.accountId, propertyName: property.name, retrievedAt: data.retrievedAt, individuals: data.individuals, organizations: data.organizations };
+    await DB.putSnapshot(snapshot);
+    Object.assign(property, { lastRefreshAttemptAt: attemptedAt, lastRefreshError: "" });
+    await DB.putProperty(property);
+    return snapshot;
+  } catch (error) {
+    Object.assign(property, { lastRefreshAttemptAt: attemptedAt, lastRefreshError: error.message || String(error) });
+    await DB.putProperty(property);
+    throw error;
+  }
+}
 
 async function removeProperty(accountId) { const property = state.properties.find((p) => p.accountId === accountId); if (!property) return; const accepted = await confirmAction("Remove property?", `${property.name} will be removed from this workspace. Its saved snapshots will remain available if you add it again.`, "Remove"); if (!accepted) return; await DB.deleteProperty(accountId); state.properties = state.properties.filter((p) => p.accountId !== accountId); await reloadSnapshots(); render(); }
 function confirmAction(title, copy, action = "Delete") { const dialog = $("#confirm-dialog"); $("#confirm-title").textContent = title; $("#confirm-copy").textContent = copy; dialog.querySelector('.danger').textContent = action; dialog.showModal(); return new Promise((resolve) => dialog.addEventListener("close", () => resolve(dialog.returnValue === "confirm"), { once: true })); }
@@ -281,7 +333,7 @@ async function clearData() { const accepted = await confirmAction("Delete all lo
 function download(filename, text, type) { const url = URL.createObjectURL(new Blob([text], { type })); const link = document.createElement("a"); link.href = url; link.download = filename; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000); }
 function csvCell(value) { const text = String(value ?? ""); return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; }
 function safeFilename(value) { return String(value || "property").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "property"; }
-function bucketLabel(bucket) { return ({ active: "Active", pending: "Pending", renewalPending: "Renewal pending", historical: "Historical / inactive", attention: "Attention", expiring30: "≤30 days", expiring60: "31–60 days", expiring90: "61–90 days", other: "Other" })[bucket] || bucket; }
+function bucketLabel(bucket) { return ({ active: "Active", pending: "Pending", renewalPending: "Renewal pending", historical: "Historical / inactive", attention: "Needs attention", expiring10: "Expires ≤10 days", approaching: "Expires ≤45 days" })[bucket] || bucket; }
 function shortName(name) { return name.replace(/casino|cardroom|card room/ig, "").trim() || name; }
 function showNotice(message, error = false) { const notice = $("#notice"); notice.textContent = message; notice.className = error ? "notice error" : "notice"; clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => notice.classList.add("hidden"), error ? 12000 : 5000); }
 

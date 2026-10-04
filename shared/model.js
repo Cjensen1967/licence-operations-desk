@@ -127,11 +127,14 @@
     // An ostensibly current/unknown record with a date already past is
     // contradictory and does deserve review.
     if (days !== null && days < 0) return "attention";
-    if (days !== null && days <= 30) return "expiring30";
-    if (days !== null && days <= 60) return "expiring60";
-    if (days !== null && days <= 90) return "expiring90";
-    if (value.includes("active") || value.includes("current") || value.includes("valid")) return "active";
-    return "other";
+    if (value.includes("active") || value.includes("current") || value.includes("valid")) {
+      if (days !== null && days <= 10) return "expiring10";
+      if (days !== null && days <= 45) return "approaching";
+      return "active";
+    }
+    // Unexpected statuses are review exceptions. Explicit Active, Inactive and
+    // Pending states are handled above and should not create attention noise.
+    return "attention";
   }
 
   function markRenewedRecords(licenses) {
@@ -157,8 +160,8 @@
   function standingForLicenses(licenses) {
     const currentLicenses = licenses.filter((license) => !license.superseded);
     const hasPending = currentLicenses.some((license) => license.bucket === "pending");
-    const hasCurrentLicense = currentLicenses.some((license) => ["active", "expiring30", "expiring60", "expiring90"].includes(license.bucket));
-    const priority = ["attention", "expiring30", "pending", "expiring60", "expiring90", "active", "other", "historical"];
+    const hasCurrentLicense = currentLicenses.some((license) => ["active", "approaching", "expiring10"].includes(license.bucket));
+    const priority = ["attention", "expiring10", "pending", "approaching", "active", "historical"];
     const bucket = hasPending && hasCurrentLicense
       ? "renewalPending"
       : priority.find((value) => currentLicenses.some((license) => license.bucket === value)) || "other";
@@ -202,7 +205,7 @@
         ...property,
         ...standingForLicenses(licenses.filter((license) => license.propertyId === property.accountId)),
       }));
-      const priority = ["attention", "renewalPending", "expiring30", "pending", "expiring60", "expiring90", "active", "other", "historical"];
+      const priority = ["attention", "expiring10", "renewalPending", "pending", "approaching", "active", "historical"];
       const bucket = priority.find((value) => propertyStandings.some((standing) => standing.bucket === value)) || "historical";
       return { ...person, licenses, currentLicenses, properties: [...person.properties.values()], propertyStandings, nearestExpiration: dated[0]?.expirationDate || "", nearestDays: dated[0]?.daysRemaining ?? null, bucket };
     }).sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -219,7 +222,7 @@
     const after = new Map((current.individuals || []).map((record) => [recordKey(record), normalizeLicense(record, { accountId: current.accountId, name: current.propertyName || "" })]));
     const events = [];
     for (const [key, value] of after) {
-      if (!before.has(key)) events.push({ type: "appeared", person: value.fullName, license: value.licenseNumber, message: "Appeared in the latest WSGC response" });
+      if (!before.has(key)) events.push({ type: "appeared", personKey: value.personKey, person: value.fullName, license: value.licenseNumber, message: "Appeared in the latest WSGC response" });
       else {
         const old = before.get(key);
         if (old.status !== value.status) events.push({ type: "status", person: value.fullName, license: value.licenseNumber, message: `Status changed: ${old.status || "Unknown"} → ${value.status || "Unknown"}` });
@@ -228,7 +231,7 @@
       }
     }
     for (const [key, value] of before) {
-      if (!after.has(key)) events.push({ type: "not_returned", person: value.fullName, license: value.licenseNumber, message: "Was not present in the latest WSGC response" });
+      if (!after.has(key)) events.push({ type: "not_returned", personKey: value.personKey, person: value.fullName, license: value.licenseNumber, message: "Was not present in the latest WSGC response" });
     }
     return { available: true, events };
   }
@@ -243,10 +246,11 @@
       historicalPeople: people.length - currentPeople.length,
       records: licenses.length,
       assignments: currentPeople.reduce((total, person) => total + (person.propertyStandings?.filter((standing) => standing.bucket !== "historical").length || 0), 0),
-      active: currentLicenses.filter((license) => license.bucket === "active").length,
-      expiring30: currentLicenses.filter((license) => license.bucket === "expiring30").length,
-      expiring90: currentLicenses.filter((license) => ["expiring30", "expiring60", "expiring90"].includes(license.bucket)).length,
-      attention: people.filter((person) => ["attention", "renewalPending", "expiring30", "pending"].includes(person.bucket)).length,
+      active: currentLicenses.filter((license) => ["active", "approaching", "expiring10"].includes(license.bucket)).length,
+      approaching45: currentLicenses.filter((license) => ["approaching", "expiring10"].includes(license.bucket)).length,
+      expiring10: currentLicenses.filter((license) => license.bucket === "expiring10").length,
+      renewalPending: people.filter((person) => person.propertyStandings?.some((standing) => standing.bucket === "renewalPending")).length,
+      attention: people.filter((person) => ["attention", "expiring10"].includes(person.bucket)).length,
     };
   }
 
