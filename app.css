@@ -47,3 +47,8 @@ dialog{width:min(820px,calc(100vw - 30px));border:0;padding:0;background:transpa
 .roster-change-row:hover{background:transparent}
 .badge.not-returned{background:var(--blue-bg);color:var(--blue);border:1px solid #c9dbe6}
 .roster-change-row .staff-star{font-size:14px}
+
+/* v1.0.5 reviewer feedback */
+.badge.positive{background:#dceee5;color:#096843;border:1px solid #cae2d6}
+.badge.not-returned{background:var(--blue-bg);color:var(--blue);border:1px solid #c9dbe6}
+.badge.home{background:#e8efe9;color:var(--forest-2);border:1px solid #cdd9d0}
