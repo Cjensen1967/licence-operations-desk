@@ -225,7 +225,12 @@
       if (!before.has(key)) events.push({ type: "appeared", personKey: value.personKey, person: value.fullName, license: value.licenseNumber, message: "Appeared in the latest WSGC response" });
       else {
         const old = before.get(key);
-        if (old.status !== value.status) events.push({ type: "status", person: value.fullName, license: value.licenseNumber, message: `Status changed: ${old.status || "Unknown"} → ${value.status || "Unknown"}` });
+        if (old.status !== value.status) {
+          const oldStatus = lower(old.status); const newStatus = lower(value.status);
+          const positive = (newStatus.includes("active") || newStatus.includes("current") || newStatus.includes("valid")) &&
+            (oldStatus.includes("pending") || oldStatus.includes("application") || oldStatus.includes("inactive") || oldStatus.includes("expired"));
+          events.push({ type: "status", direction: positive ? "positive" : "neutral", personKey: value.personKey, person: value.fullName, license: value.licenseNumber, fromStatus: old.status, toStatus: value.status, message: `Status changed: ${old.status || "Unknown"} → ${value.status || "Unknown"}` });
+        }
         if (old.expirationDate !== value.expirationDate) events.push({ type: "expiration", person: value.fullName, license: value.licenseNumber, message: `Expiration changed: ${old.expirationDate || "None"} → ${value.expirationDate || "None"}` });
         if (old.receivedDate !== value.receivedDate) events.push({ type: "received", person: value.fullName, license: value.licenseNumber, message: `Received date changed: ${old.receivedDate || "None"} → ${value.receivedDate || "None"}` });
       }
