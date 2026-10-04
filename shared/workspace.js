@@ -23,14 +23,22 @@
 
   function normalizeSettings(value = {}) {
     const people = {};
+    const properties = {};
     for (const [key, preference] of Object.entries(value.people || {})) {
       const cleanKey = clean(key);
       if (cleanKey) people[cleanKey] = normalizePersonPreference(preference);
     }
+    for (const [key, preference] of Object.entries(value.properties || {})) {
+      const cleanKey = clean(key);
+      if (cleanKey) properties[cleanKey] = { shortName: clean(preference?.shortName), home: Boolean(preference?.home) };
+    }
+    const homeKey = Object.keys(properties).find((key) => properties[key].home);
+    if (homeKey) for (const key of Object.keys(properties)) properties[key].home = key === homeKey;
     const thresholds = unique(value.alertThresholds).map(Number).filter((number) => Number.isFinite(number) && number > 0).sort((a, b) => a - b);
     return {
       version: 1,
       people,
+      properties,
       alertThresholds: thresholds.length ? thresholds : [...DEFAULT_ALERT_THRESHOLDS],
     };
   }
@@ -42,6 +50,7 @@
       ...base,
       ...next,
       people: { ...base.people, ...next.people },
+      properties: { ...base.properties, ...next.properties },
     });
   }
 
