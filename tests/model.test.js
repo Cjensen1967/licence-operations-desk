@@ -48,3 +48,11 @@ test("snapshot comparison reports records no longer returned", () => {
   assert.equal(result.events.length, 1);
   assert.equal(result.events[0].type, "not_returned");
 });
+
+
+test("pending activation to active is a positive status change", () => {
+  const previous = { accountId: "p1", individuals: [{ fullname: "Person One", contactid: "c1", licensenumber: "L1", status: "Pending Activation" }] };
+  const current = { accountId: "p1", individuals: [{ fullname: "Person One", contactid: "c1", licensenumber: "L1", status: "Active" }] };
+  const event = compareSnapshots(previous, current).events.find((item) => item.type === "status");
+  assert.equal(event.direction, "positive");
+});
