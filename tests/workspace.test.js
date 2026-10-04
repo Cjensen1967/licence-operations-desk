@@ -24,3 +24,10 @@ test("normalization removes empty and duplicate tags", () => {
   assert.deepEqual(settings.people.a.tags, ["Night", "Lead"]);
   assert.deepEqual(settings.alertThresholds, [30, 60, 90]);
 });
+
+
+test("property preferences keep one home property and short names", () => {
+  const settings = normalizeSettings({ properties: { p1: { shortName: "Moose MLT", home: true }, p2: { shortName: "Silver Dollar", home: true } } });
+  assert.equal(settings.properties.p1.shortName, "Moose MLT");
+  assert.equal(Object.values(settings.properties).filter((property) => property.home).length, 1);
+});
