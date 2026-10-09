@@ -61,6 +61,7 @@ function bindEvents() {
   $("#open-not-returned").addEventListener("click", () => switchView("changes"));
   $("#more-button").addEventListener("click", () => $("#more-menu").classList.toggle("hidden"));
   document.addEventListener("click", (event) => { if (!event.target.closest(".top-actions")) $("#more-menu").classList.add("hidden"); });
+  $("#show-all-people").addEventListener("click", () => { $("#people-search").value = ""; $("#property-filter").value = ""; $("#staff-filter").value = ""; $("#status-filter").value = ""; renderPeople(); });
   $("#people-search").addEventListener("input", renderPeople); $("#property-filter").addEventListener("change", renderPeople); $("#staff-filter").addEventListener("change", renderPeople); $("#status-filter").addEventListener("change", renderPeople);
   $("#open-my-staff").addEventListener("click", () => { $("#staff-filter").value = "starred"; switchView("people"); });
   $("#property-dialog form").addEventListener("submit", (event) => { event.preventDefault(); performSearch(Object.fromEntries(new FormData(event.currentTarget).entries())); });
