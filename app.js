@@ -172,9 +172,9 @@ function renderProperties() {
   $$('[data-remove]').forEach((button) => button.addEventListener("click", () => removeProperty(button.dataset.remove)));
   $$('[data-property-open]').forEach((button) => button.addEventListener("click", () => openPropertyWorkspace(button.dataset.propertyOpen, button.dataset.section)));
   $$('[data-property-roster]').forEach((button) => button.addEventListener("click", () => openPropertyPeople(button.dataset.propertyRoster, button.dataset.status || "current")));
-  $('[data-property-export]').forEach((button) => button.addEventListener("click", () => exportPropertyCsv(button.dataset.propertyExport)));
-  $('[data-property-short-name]').forEach((button) => button.addEventListener("click", () => setPropertyShortName(button.dataset.propertyShortName)));
-  $('[data-property-home]').forEach((button) => button.addEventListener("click", () => toggleHomeProperty(button.dataset.propertyHome)));
+  $$('[data-property-export]').forEach((button) => button.addEventListener("click", () => exportPropertyCsv(button.dataset.propertyExport)));
+  $$('[data-property-short-name]').forEach((button) => button.addEventListener("click", () => setPropertyShortName(button.dataset.propertyShortName)));
+  $$('[data-property-home]').forEach((button) => button.addEventListener("click", () => toggleHomeProperty(button.dataset.propertyHome)));
 }
 
 async function setPropertyShortName(accountId) {

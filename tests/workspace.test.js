@@ -1,4 +1,6 @@
 "use strict";
+const fs = require("node:fs");
+const path = require("node:path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const { createSettingsBackup, mergeSettings, normalizeSettings, parseSettingsBackup } = require("../shared/workspace.js");
@@ -30,4 +32,30 @@ test("property preferences keep one home property and short names", () => {
   const settings = normalizeSettings({ properties: { p1: { shortName: "Moose MLT", home: true }, p2: { shortName: "Silver Dollar", home: true } } });
   assert.equal(settings.properties.p1.shortName, "Moose MLT");
   assert.equal(Object.values(settings.properties).filter((property) => property.home).length, 1);
+
+  const merged = mergeSettings(
+    { properties: { p1: { shortName: "Moose MLT", home: true } } },
+    { properties: { p2: { shortName: "Silver Dollar", home: true } } },
+  );
+  assert.equal(Object.values(merged.properties).filter((property) => property.home).length, 1);
+  assert.equal(merged.properties.p1.shortName, "Moose MLT");
+  assert.equal(merged.properties.p2.shortName, "Silver Dollar");
+});
+
+test("app.js uses multi-element selector $$(...) for all .forEach() event bindings", () => {
+  const source = fs.readFileSync(path.join(__dirname, "..", "app.js"), "utf8");
+  const singleSelectorArrayCalls = [...source.matchAll(/(?<![\$a-zA-Z0-9_])\$\([^)]+\)\.(forEach|map|filter|some|every|find|reduce)\b/g)];
+  assert.deepEqual(singleSelectorArrayCalls.map((match) => match[0]), []);
+
+  for (const selector of [
+    "[data-property-export]",
+    "[data-property-short-name]",
+    "[data-property-home]",
+  ]) {
+    assert.equal(
+      source.includes(`$$('${selector}').forEach(`),
+      true,
+      `Expected $$('${selector}').forEach(...) in app.js`,
+    );
+  }
 });
