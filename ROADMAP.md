@@ -4,19 +4,40 @@ This document is the planning surface for Licence Operations Desk. Items may be 
 
 ## Baseline
 
-**Current development baseline:** v1.0.4
+**Current published baseline:** v1.0.4 (`manifest.json` remains at `1.0.4` until final release packaging)  
+**Current development candidate:** v1.0.5
 
-v1.0.4 remains the published baseline. The v1.0.5 scope below was discussed and approved on October 1, 2026. The manifest remains at v1.0.4 until release-candidate review.
+## v1.0.5 — Release Candidate Scope (Completed in `main`)
 
-## v1.0.5 — In development
+### Implemented and verified
 
-### Approved
+- **People & All Licence Records registers:**
+  - **People register (person-centric):** defaults to **All returned people**, provides one-click **Show all people** reset, readable filter controls, local property short-name search, and grouped records per person.
+  - **All licence records register (record-centric):** displays one row per returned licence observation and its managed property association, defaults to **All returned records** (including active, pending, expired, inactive, and superseded records), preserves duplicate licence observations across properties, and reports returned observation counts separately from unique licence counts without merging unnumbered pending records.
+- **My Staff & property preferences:**
+  - Locally flag people a manager oversees with optional department and tags; labels persist across roster refreshes and remain visibly separate from WSGC facts.
+  - Assign local property short names while keeping the official WSGC property name visible on property cards, workspaces, and change groups.
+  - Designate a single **Home property** with visual card highlighting and first-position sorting.
+- **Changes log clarity & status-transition accuracy:**
+  - Prominently displays the person, licence number, licence type, managed property, observed change, and relevant dates (`Received Date` and `Expiration Date`).
+  - Preserves positive green styling for genuine activations (`Pending Activation → Active`, `Pending → Active`) while preventing false positives on negative substrings such as `Pending → Inactive` or `Pending → Invalid`.
+  - Preserves literal observation wording for **Not returned** events.
+- **Settings-only portability & full backups:**
+  - Export and import managed-property selections, short names, Home designation, My Staff flags, departments, tags, and alert thresholds without roster snapshots, history, credentials, cookies, or tokens (supporting **Merge** and **Replace**).
+  - Full local backups at schema v2 with schema v1 restore compatibility.
+- **Actionable property dashboards, workspaces & responsive view:**
+  - Balanced property card grid for 1–2 or many properties, auto-closing card action menus, property-specific review workspaces, CSV exports for both people and licence records, and narrow-screen stacked tables.
+- **Application information & acknowledgements:**
+  - In-extension **About & acknowledgements** dialog accessible from the workspace actions menu and sidebar, crediting Ryan Wilson for early testing, feedback, and feature suggestions.
 
-- **My Staff:** locally flag people a manager oversees, with optional department and tags. Labels persist independently of refreshed WSGC snapshots and remain visibly separate from source facts.
-- **Settings-only portability:** export and import managed-property selections, My Staff flags, departments, tags, preferences, and alert thresholds without roster snapshots, history, credentials, cookies, or tokens. Import supports merge and replace.
-- **Actionable property dashboards:** property cards expose roster, active, pending/renewal, attention, recent-change, and last-refresh information with direct actions.
-- **Property workspaces:** property-specific summary, filtered roster, My Staff, attention queue, expiration counts, recent changes, refresh, and CSV export.
-- **Responsive reference view:** narrow-screen tables become stacked cards, dialogs use the full screen, and important actions do not depend on hover. Desktop remains the primary target.
+### Support contact & future alias transition plan
+
+- `support.html` and store listings continue to use the active maintainer support address until a replacement alias is provisioned.
+- When a dedicated support alias (such as a custom-domain forwarder or alias routing to the maintainer inbox) is ready to be introduced:
+  1. Verify inbound delivery and reply-from behavior on the alias first.
+  2. Update the `mailto:` link and visible address in `support.html`.
+  3. Update the support email field in the Chrome Web Store and Microsoft Edge Add-ons developer dashboards during the next store submission.
+- `privacy.html` remains aligned with the currently published v1.0.4 extension until v1.0.5 is packaged and published.
 
 ### Candidates under discussion
 

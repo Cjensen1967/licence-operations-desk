@@ -1,8 +1,8 @@
 "use strict";
 
-const { normalizeOrganization, normalizeIndividualLicense, markRenewedRecords, buildPeople, compareSnapshots, summarize } = WSGCModel;
+const { normalizeOrganization, normalizeIndividualLicense, markRenewedRecords, buildPeople, buildLicenseRecords, summarizeLicenseRecords, compareSnapshots, summarize } = WSGCModel;
 const { DEFAULT_DEPARTMENTS, normalizeSettings, mergeSettings, createSettingsBackup, parseSettingsBackup } = WorkspaceSettings;
-const state = { properties: [], snapshots: new Map(), histories: new Map(), people: [], changes: [], workspace: normalizeSettings(), view: "overview", sort: "fullName", sortDirection: 1, searchMode: "managed", pendingSettingsImport: null };
+const state = { properties: [], snapshots: new Map(), histories: new Map(), people: [], records: [], changes: [], workspace: normalizeSettings(), view: "overview", registerMode: "people", sort: "fullName", sortDirection: 1, recordSort: "fullName", recordSortDirection: 1, searchMode: "managed", pendingSettingsImport: null };
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>'"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[c]);
@@ -49,41 +49,70 @@ async function reloadSnapshots() {
     const comparison = compareSnapshots(history[1], history[0]);
     if (comparison.available) state.changes.push(...comparison.events.map((event) => ({ ...event, property, previousRetrievedAt: history[1]?.retrievedAt || "", currentRetrievedAt: history[0]?.retrievedAt || "" })));
   }
-  state.people = buildPeople(state.properties, [...state.snapshots.values()]);
+  const latestSnapshots = [...state.snapshots.values()];
+  state.people = buildPeople(state.properties, latestSnapshots);
+  state.records = buildLicenseRecords(state.properties, latestSnapshots);
 }
 
 function bindEvents() {
   $$(".nav-item").forEach((button) => button.addEventListener("click", () => switchView(button.dataset.view)));
-  $$('[data-go]').forEach((button) => button.addEventListener("click", () => { if (button.dataset.filter) $("#status-filter").value = button.dataset.filter; switchView(button.dataset.go); }));
+  $$('[data-register-mode]').forEach((button) => button.addEventListener("click", () => switchRegisterMode(button.dataset.registerMode)));
+  $$('[data-go]').forEach((button) => button.addEventListener("click", () => { if (button.dataset.filter) { $("#status-filter").value = button.dataset.filter; switchRegisterMode("people"); } switchView(button.dataset.go); }));
   $("#add-property").addEventListener("click", () => openPropertyDialog("managed")); $("#empty-add").addEventListener("click", () => openPropertyDialog("managed"));
   $("#quick-lookup").addEventListener("click", () => openPropertyDialog("quick"));
   $("#refresh-all").addEventListener("click", refreshAll);
   $("#open-not-returned").addEventListener("click", () => switchView("changes"));
   $("#more-button").addEventListener("click", () => $("#more-menu").classList.toggle("hidden"));
-  document.addEventListener("click", (event) => { if (!event.target.closest(".top-actions")) $("#more-menu").classList.add("hidden"); });
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".top-actions")) $("#more-menu").classList.add("hidden");
+    $$("details.card-menu[open]").forEach((menu) => { if (!menu.contains(event.target)) menu.removeAttribute("open"); });
+  });
   $("#show-all-people").addEventListener("click", () => { $("#people-search").value = ""; $("#property-filter").value = ""; $("#staff-filter").value = ""; $("#status-filter").value = ""; renderPeople(); });
   $("#people-search").addEventListener("input", renderPeople); $("#property-filter").addEventListener("change", renderPeople); $("#staff-filter").addEventListener("change", renderPeople); $("#status-filter").addEventListener("change", renderPeople);
-  $("#open-my-staff").addEventListener("click", () => { $("#staff-filter").value = "starred"; switchView("people"); });
+  $("#show-all-records").addEventListener("click", () => { $("#records-search").value = ""; $("#records-property-filter").value = ""; $("#records-staff-filter").value = ""; $("#records-status-filter").value = ""; renderRecords(); });
+  $("#records-search").addEventListener("input", renderRecords); $("#records-property-filter").addEventListener("change", renderRecords); $("#records-staff-filter").addEventListener("change", renderRecords); $("#records-status-filter").addEventListener("change", renderRecords);
+  $("#open-my-staff").addEventListener("click", () => { $("#staff-filter").value = "starred"; switchRegisterMode("people"); switchView("people"); });
   $("#property-dialog form").addEventListener("submit", (event) => { event.preventDefault(); performSearch(Object.fromEntries(new FormData(event.currentTarget).entries())); });
   $("#property-dialog-close").addEventListener("click", () => $("#property-dialog").close());
   $("#property-dialog-cancel").addEventListener("click", () => $("#property-dialog").close());
   $("#person-close").addEventListener("click", () => $("#person-dialog").close());
   $("#quick-close").addEventListener("click", () => $("#quick-dialog").close());
   $("#property-workspace-close").addEventListener("click", () => $("#property-workspace-dialog").close());
-  $("#export-csv").addEventListener("click", exportCsv); $("#export-backup").addEventListener("click", exportBackup); $("#import-backup").addEventListener("click", () => $("#backup-file").click());
+  $("#export-csv").addEventListener("click", exportCsv); $("#export-records-csv").addEventListener("click", exportRecordsCsv); $("#export-records-inline").addEventListener("click", exportRecordsCsv);
+  $("#export-backup").addEventListener("click", exportBackup); $("#import-backup").addEventListener("click", () => $("#backup-file").click());
   $("#backup-file").addEventListener("change", importBackup); $("#clear-data").addEventListener("click", clearData);
   $("#export-settings").addEventListener("click", exportSettings); $("#import-settings").addEventListener("click", () => $("#settings-file").click());
   $("#settings-file").addEventListener("change", prepareSettingsImport); $("#settings-import-cancel").addEventListener("click", () => $("#settings-import-dialog").close());
   $("#settings-import-merge").addEventListener("click", () => applySettingsImport("merge")); $("#settings-import-replace").addEventListener("click", () => applySettingsImport("replace"));
+  $("#open-about").addEventListener("click", () => { $("#more-menu").classList.add("hidden"); $("#about-dialog").showModal(); });
+  $("#sidebar-about").addEventListener("click", () => $("#about-dialog").showModal());
+  $("#about-close").addEventListener("click", () => $("#about-dialog").close());
+  $("#about-ok").addEventListener("click", () => $("#about-dialog").close());
   $$('th[data-sort]').forEach((th) => th.addEventListener("click", () => { state.sortDirection = state.sort === th.dataset.sort ? -state.sortDirection : 1; state.sort = th.dataset.sort; renderPeople(); }));
+  $$('th[data-record-sort]').forEach((th) => th.addEventListener("click", () => { state.recordSortDirection = state.recordSort === th.dataset.recordSort ? -state.recordSortDirection : 1; state.recordSort = th.dataset.recordSort; renderRecords(); }));
+}
+
+function switchRegisterMode(mode = "people") {
+  state.registerMode = mode === "records" ? "records" : "people";
+  $$('[data-register-mode]').forEach((button) => {
+    const active = button.dataset.registerMode === state.registerMode;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", active ? "true" : "false");
+  });
+  $("#people-register-panel").classList.toggle("hidden", state.registerMode !== "people");
+  $("#records-register-panel").classList.toggle("hidden", state.registerMode !== "records");
+  if (state.registerMode === "records") renderRecords();
+  else renderPeople();
 }
 
 function switchView(view) {
   state.view = view; $$(".nav-item").forEach((item) => item.classList.toggle("active", item.dataset.view === view));
   $$(".view").forEach((item) => item.classList.toggle("active", item.id === `${view}-view`));
-  const labels = { overview: ["Briefing", "What deserves attention across your managed properties."], people: ["People", "One person, every returned public record."], properties: ["Properties", "Manage accepted snapshots for your licensing scope."], changes: ["Changes", "Observed differences between the two latest accepted responses."] };
+  const labels = { overview: ["Briefing", "What deserves attention across your managed properties."], people: ["People & Licences", "Person-centric and record-centric registers across your managed properties."], properties: ["Properties", "Manage accepted snapshots for your licensing scope."], changes: ["Changes", "Observed differences between the two latest accepted responses."] };
   $("#view-title").textContent = labels[view][0]; $("#view-subtitle").textContent = labels[view][1];
-  if (view === "people") renderPeople(); if (view === "properties") renderProperties(); if (view === "changes") renderChanges();
+  if (view === "people") { renderPeople(); renderRecords(); }
+  if (view === "properties") renderProperties();
+  if (view === "changes") renderChanges();
 }
 
 function render() {
@@ -93,12 +122,18 @@ function render() {
   $("#stats").innerHTML = [
     ["Managed properties", summary.properties], ["Current people shown", summary.people], ["Renewal pending", summary.renewalPending], ["Not returned", notReturned.length], ["Expiring ≤10 days", summary.expiring10], ["Needs attention", summary.attention],
   ].map(([label, value]) => `<div class="stat ${label === "Needs attention" ? "attention" : label === "Not returned" ? "change" : ""}"><span>${label}</span><strong>${value}</strong></div>`).join("");
-  renderAttention(); renderPropertySummary(); renderNotReturned(); renderMyStaff(); renderRecent(); renderFilters(); renderPeople(); renderProperties(); renderChanges();
+  renderAttention(); renderPropertySummary(); renderNotReturned(); renderMyStaff(); renderRecent(); renderFilters(); renderPeople(); renderRecords(); renderProperties(); renderChanges();
 }
 
 function personPreference(personOrKey) { return state.workspace.people[typeof personOrKey === "string" ? personOrKey : personOrKey.key] || {}; }
 function propertyPreference(propertyOrId) { return state.workspace.properties?.[typeof propertyOrId === "string" ? propertyOrId : propertyOrId.accountId] || {}; }
-function propertyDisplayName(property) { return propertyPreference(property).shortName || shortName(property.name); }
+function propertyDisplayName(property) { return propertyPreference(property).shortName || property.name; }
+function propertyChipLabel(propertyOrStanding) {
+  const accountId = propertyOrStanding.accountId;
+  const managed = accountId ? state.properties.find((item) => item.accountId === accountId) : null;
+  const custom = managed ? propertyPreference(managed).shortName : "";
+  return custom || shortName(propertyOrStanding.name || managed?.name || "");
+}
 function sortedProperties() { return [...state.properties].sort((a, b) => Number(Boolean(propertyPreference(b).home)) - Number(Boolean(propertyPreference(a).home)) || propertyDisplayName(a).localeCompare(propertyDisplayName(b))); }
 function starredPeople() { return state.people.filter((person) => personPreference(person).starred); }
 
@@ -136,16 +171,23 @@ function renderRecent() {
 }
 
 function renderFilters() {
-  const current = $("#property-filter").value;
-  $("#property-filter").innerHTML = `<option value="">All properties</option>${sortedProperties().map((p) => `<option value="${escapeHtml(p.accountId)}">${escapeHtml(propertyDisplayName(p))}</option>`).join("")}`;
-  $("#property-filter").value = current;
+  const options = `<option value="">All managed properties</option>${sortedProperties().map((p) => `<option value="${escapeHtml(p.accountId)}">${escapeHtml(propertyDisplayName(p))}</option>`).join("")}`;
+  const currentPeopleProp = $("#property-filter").value;
+  $("#property-filter").innerHTML = options;
+  $("#property-filter").value = currentPeopleProp;
+  const recordsFilter = $("#records-property-filter");
+  if (recordsFilter) {
+    const currentRecordsProp = recordsFilter.value;
+    recordsFilter.innerHTML = options;
+    recordsFilter.value = currentRecordsProp;
+  }
 }
 
 function filteredPeople() {
   const query = $("#people-search").value.trim().toLowerCase(); const propertyId = $("#property-filter").value; const status = $("#status-filter").value; const staff = $("#staff-filter").value;
   return state.people.filter((person) => {
     const preference = personPreference(person);
-    const haystack = [person.fullName, preference.department, ...(preference.tags || []), ...person.properties.map((p) => p.name), ...person.licenses.flatMap((l) => [l.licenseNumber, l.licenseType, l.status])].join(" ").toLowerCase();
+    const haystack = [person.fullName, person.contactId, preference.department, ...(preference.tags || []), ...person.properties.flatMap((p) => [p.name, propertyDisplayName(p)]), ...person.licenses.flatMap((l) => [l.licenseNumber, l.licenseType, l.status])].join(" ").toLowerCase();
     const propertyMatch = !propertyId || person.properties.some((p) => p.accountId === propertyId);
     const currentLicenses = person.currentLicenses || person.licenses;
     const scopedLicenses = propertyId ? currentLicenses.filter((license) => license.propertyId === propertyId) : currentLicenses;
@@ -160,21 +202,100 @@ function renderPeople() {
   $("#people-result-count").textContent = `${people.length} ${people.length === 1 ? "person" : "people"}`;
   $("#people-table").innerHTML = people.map((person) => { const preference = personPreference(person); return `<tr data-person="${escapeHtml(person.key)}"><td class="person-cell" data-label="Person"><div class="person-name-line"><button class="star-button ${preference.starred ? "selected" : ""}" data-star-person="${escapeHtml(person.key)}" aria-label="${preference.starred ? "Remove from" : "Add to"} My Staff" title="${preference.starred ? "Remove from" : "Add to"} My Staff">${preference.starred ? "★" : "☆"}</button><span><strong>${escapeHtml(person.fullName)}</strong><small class="record-id">${person.identity === "name_fallback" ? "Grouped by name; contact ID unavailable" : escapeHtml(person.contactId)}</small>${preference.starred ? `<small class="local-label">${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || "My Staff")}</small>` : ""}</span></div></td><td data-label="Property observation"><div class="property-standings">${propertyStandingChips(person)}</div></td><td class="record-count" data-label="Returned records"><strong>${person.licenses.length}</strong><small>${escapeHtml([...new Set(person.licenses.map((l) => l.licenseType).filter(Boolean))].join(", "))}</small></td><td class="date-cell" data-label="Nearest expiration"><strong>${formatDate(person.nearestExpiration)}</strong><small>${person.nearestDays === null ? "No date" : person.nearestDays < 0 ? `${Math.abs(person.nearestDays)} days ago` : `${person.nearestDays} days`}</small></td><td data-label="Review state"><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></td></tr>`; }).join("");
   bindPersonLinks();
-  $$('[data-star-person]').forEach((button) => button.addEventListener("click", async (event) => { event.stopPropagation(); await toggleStar(button.dataset.starPerson); }));
+  $$('#people-table [data-star-person]').forEach((button) => button.addEventListener("click", async (event) => { event.stopPropagation(); await toggleStar(button.dataset.starPerson); }));
+}
+
+function filteredRecords() {
+  const query = ($("#records-search")?.value || "").trim().toLowerCase();
+  const propertyId = $("#records-property-filter")?.value || "";
+  const status = $("#records-status-filter")?.value || "";
+  const staff = $("#records-staff-filter")?.value || "";
+  return state.records.filter((record) => {
+    const preference = personPreference(record.personKey);
+    const managed = state.properties.find((item) => item.accountId === record.propertyId);
+    const displayProp = managed ? propertyDisplayName(managed) : record.propertyName;
+    const haystack = [record.fullName, record.contactId, record.licenseNumber, record.licenseType, record.status, record.propertyName, displayProp, preference.department, ...(preference.tags || [])].join(" ").toLowerCase();
+    const propertyMatch = !propertyId || record.propertyId === propertyId;
+    const statusMatch = !status || (
+      status === "current" ? (!record.superseded && record.bucket !== "historical") :
+      status === "active" ? (!record.superseded && ["active", "approaching", "expiring10"].includes(record.bucket)) :
+      status === "pending" ? (!record.superseded && record.bucket === "pending") :
+      status === "expiring45" ? (!record.superseded && ["approaching", "expiring10"].includes(record.bucket)) :
+      status === "expiring10" ? (!record.superseded && record.bucket === "expiring10") :
+      status === "attention" ? (!record.superseded && ["attention", "expiring10"].includes(record.bucket)) :
+      status === "historical" ? (!record.superseded && record.bucket === "historical") :
+      status === "superseded" ? Boolean(record.superseded) :
+      status === "duplicates" ? Boolean(record.duplicateAcrossProperties) :
+      record.bucket === status
+    );
+    return (!query || haystack.includes(query)) && propertyMatch && statusMatch && (!staff || preference.starred);
+  });
+}
+
+function renderRecords() {
+  if (!$("#records-table")) return;
+  const records = filteredRecords().sort((a, b) => {
+    const field = state.recordSort;
+    const av = a[field] ?? (typeof a[field] === "number" ? Number.MAX_SAFE_INTEGER : "");
+    const bv = b[field] ?? (typeof b[field] === "number" ? Number.MAX_SAFE_INTEGER : "");
+    return (typeof av === "string" ? av.localeCompare(String(bv)) : (av ?? Number.MAX_SAFE_INTEGER) - (bv ?? Number.MAX_SAFE_INTEGER)) * state.recordSortDirection;
+  });
+  const summary = summarizeLicenseRecords(records);
+  const totalSummary = summarizeLicenseRecords(state.records);
+  $("#records-result-count").textContent = `${summary.observations} ${summary.observations === 1 ? "observation" : "observations"} · ${summary.uniqueLicenses} unique`;
+  $("#records-summary-bar").innerHTML = `
+    <div class="records-summary-item"><span>Returned observations shown</span><strong>${summary.observations}</strong><small>${summary.observations === totalSummary.observations ? "All returned snapshot rows" : `of ${totalSummary.observations} total returned rows`}</small></div>
+    <div class="records-summary-item"><span>Unique licences shown</span><strong>${summary.uniqueLicenses}</strong><small>${summary.uniqueNumberedLicenses} numbered · ${summary.unnumberedRecords} unnumbered pending/application</small></div>
+    <div class="records-summary-item"><span>Multi-property observations</span><strong>${summary.multiPropertyLicenses}</strong><small>${summary.duplicateObservations} extra property ${summary.duplicateObservations === 1 ? "observation" : "observations"} preserved</small></div>
+    <div class="records-summary-item"><span>Current vs. historical</span><strong>${summary.currentObservations} current</strong><small>${summary.historicalObservations} historical · ${summary.supersededObservations} superseded</small></div>
+  `;
+  $("#records-table").innerHTML = records.map((record) => {
+    const preference = personPreference(record.personKey);
+    const managed = state.properties.find((item) => item.accountId === record.propertyId);
+    const propLabel = managed ? propertyDisplayName(managed) : record.propertyName;
+    const hasCustomShort = managed && propertyPreference(managed).shortName && propertyPreference(managed).shortName !== managed.name;
+    const badgeClass = record.superseded ? "superseded" : record.bucket;
+    const badgeText = record.superseded ? "Renewed" : bucketLabel(record.bucket);
+    const classNote = record.superseded
+      ? `Superseded by ${record.supersededBy || "newer licence"}`
+      : record.bucket === "historical"
+        ? "Historical / inactive record"
+        : "Current record";
+    return `<tr data-person="${escapeHtml(record.personKey)}">
+      <td class="person-cell" data-label="Person"><div class="person-name-line"><button class="star-button ${preference.starred ? "selected" : ""}" data-star-person="${escapeHtml(record.personKey)}" aria-label="${preference.starred ? "Remove from" : "Add to"} My Staff" title="${preference.starred ? "Remove from" : "Add to"} My Staff">${preference.starred ? "★" : "☆"}</button><span><strong>${escapeHtml(record.fullName)}</strong><small class="record-id">${record.identity === "name_fallback" ? "Grouped by name; contact ID unavailable" : escapeHtml(record.contactId)}</small>${preference.starred ? `<small class="local-label">${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || "My Staff")}</small>` : ""}</span></div></td>
+      <td data-label="Licence number"><strong class="mono-number">${escapeHtml(record.licenseNumber || "—")}</strong><small>${record.hasLicenseNumber ? (record.duplicateAcrossProperties ? `Observed at ${record.propertyObservationCount} properties` : "Numbered licence") : "No licence # · Pending/application"}</small></td>
+      <td data-label="Licence type"><strong>${escapeHtml(record.licenseType || "—")}</strong></td>
+      <td data-label="WSGC status"><strong>${escapeHtml(record.status || "Unknown")}</strong></td>
+      <td class="date-cell" data-label="Received Date"><strong>${formatDate(record.receivedDate)}</strong></td>
+      <td class="date-cell" data-label="Expiration Date"><strong>${formatDate(record.expirationDate)}</strong><small>${record.daysRemaining === null ? "No date" : record.daysRemaining < 0 ? `${Math.abs(record.daysRemaining)} days ago` : `${record.daysRemaining} days`}</small></td>
+      <td data-label="Managed property"><strong>${escapeHtml(propLabel)}</strong>${hasCustomShort ? `<small>${escapeHtml(managed.name)}</small>` : ""}</td>
+      <td data-label="Classification"><span class="badge ${badgeClass}">${badgeText}</span><small>${escapeHtml(classNote)}</small></td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="8"><div class="empty-inline">No returned licence records match the current filters.</div></td></tr>`;
+  bindPersonLinks();
+  $$('#records-table [data-star-person]').forEach((button) => button.addEventListener("click", async (event) => { event.stopPropagation(); await toggleStar(button.dataset.starPerson); }));
 }
 
 function renderProperties() {
   $("#properties-grid").innerHTML = sortedProperties().map((property) => {
     const snap = state.snapshots.get(property.accountId); const metrics = propertyMetrics(property); const fresh = freshness(snap?.retrievedAt);
-    return `<article class="property-card"><div class="property-card-head"><span class="badge managed">Managed</span><span class="freshness ${fresh.key}">${fresh.label}</span>${propertyPreference(property).home ? '<span class="badge home">Home</span>' : ""}<h3>${escapeHtml(propertyDisplayName(property))}</h3></div><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · ") || property.accountId)}</p>${property.lastRefreshError ? `<div class="refresh-warning"><strong>Last refresh attempt failed.</strong><span>${escapeHtml(property.lastRefreshError)}</span><small>Showing the last successfully saved roster from ${snap ? formatTime(snap.retrievedAt) : "no previous refresh"}.</small></div>` : ""}<div class="property-dashboard"><button data-property-roster="${escapeHtml(property.accountId)}"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button class="${metrics.attention ? "attention" : ""}" data-property-roster="${escapeHtml(property.accountId)}" data-status="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-property-open="${escapeHtml(property.accountId)}" data-section="changes"><span>Recent changes</span><strong>${metrics.changes}</strong></button><div><span>Last successful refresh</span><strong>${snap ? formatTime(snap.retrievedAt) : "Never"}</strong></div></div><div class="card-actions"><button class="button primary" data-property-open="${escapeHtml(property.accountId)}">Open property</button><button class="button secondary" data-refresh="${escapeHtml(property.accountId)}">Refresh</button><details class="card-menu"><summary aria-label="More property actions">•••</summary><div><button data-property-short-name="${escapeHtml(property.accountId)}">Set short name</button><button data-property-home="${escapeHtml(property.accountId)}">${propertyPreference(property).home ? "Unset home property" : "Set as home property"}</button><button data-property-export="${escapeHtml(property.accountId)}">Export roster CSV</button><button data-remove="${escapeHtml(property.accountId)}" class="danger-text">Remove property</button></div></details></div></article>`;
+    const pref = propertyPreference(property);
+    const isHome = Boolean(pref.home);
+    const displayTitle = propertyDisplayName(property);
+    const hasCustomShort = Boolean(pref.shortName && pref.shortName !== property.name);
+    return `<article class="property-card ${isHome ? "home-property" : ""}"><div class="property-card-head"><span class="badge managed">Managed</span><span class="freshness ${fresh.key}">${fresh.label}</span>${isHome ? '<span class="badge home">★ Home property</span>' : ""}<h3>${escapeHtml(displayTitle)}</h3>${hasCustomShort ? `<small class="official-property-name">Official WSGC name: ${escapeHtml(property.name)}</small>` : ""}</div><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · ") || property.accountId)}</p>${property.lastRefreshError ? `<div class="refresh-warning"><strong>Last refresh attempt failed.</strong><span>${escapeHtml(property.lastRefreshError)}</span><small>Showing the last successfully saved roster from ${snap ? formatTime(snap.retrievedAt) : "no previous refresh"}.</small></div>` : ""}<div class="property-dashboard"><button data-property-roster="${escapeHtml(property.accountId)}"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-property-roster="${escapeHtml(property.accountId)}" data-status="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button class="${metrics.attention ? "attention" : ""}" data-property-roster="${escapeHtml(property.accountId)}" data-status="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-property-open="${escapeHtml(property.accountId)}" data-section="changes"><span>Recent changes</span><strong>${metrics.changes}</strong></button><div><span>Last successful refresh</span><strong>${snap ? formatTime(snap.retrievedAt) : "Never"}</strong></div></div><div class="card-actions"><button class="button primary" data-property-open="${escapeHtml(property.accountId)}">Open property</button><button class="button secondary" data-refresh="${escapeHtml(property.accountId)}">Refresh</button><details class="card-menu"><summary aria-label="More property actions">•••</summary><div><button data-property-short-name="${escapeHtml(property.accountId)}">Set short name</button><button data-property-home="${escapeHtml(property.accountId)}">${isHome ? "Unset home property" : "Set as home property"}</button><button data-property-export="${escapeHtml(property.accountId)}">Export roster CSV</button><button data-remove="${escapeHtml(property.accountId)}" class="danger-text">Remove property</button></div></details></div></article>`;
   }).join("") || `<div class="empty-state"><h2>No managed properties</h2><p>Add at least one property to begin.</p></div>`;
+  $$("details.card-menu").forEach((menu) => menu.addEventListener("toggle", () => {
+    if (menu.open) $$("details.card-menu[open]").forEach((other) => { if (other !== menu) other.removeAttribute("open"); });
+  }));
+  const closeParentMenu = (button) => button.closest("details.card-menu")?.removeAttribute("open");
   $$('[data-refresh]').forEach((button) => button.addEventListener("click", () => refreshProperty(button.dataset.refresh, button)));
-  $$('[data-remove]').forEach((button) => button.addEventListener("click", () => removeProperty(button.dataset.remove)));
+  $$('[data-remove]').forEach((button) => button.addEventListener("click", () => { closeParentMenu(button); removeProperty(button.dataset.remove); }));
   $$('[data-property-open]').forEach((button) => button.addEventListener("click", () => openPropertyWorkspace(button.dataset.propertyOpen, button.dataset.section)));
   $$('[data-property-roster]').forEach((button) => button.addEventListener("click", () => openPropertyPeople(button.dataset.propertyRoster, button.dataset.status || "current")));
-  $$('[data-property-export]').forEach((button) => button.addEventListener("click", () => exportPropertyCsv(button.dataset.propertyExport)));
-  $$('[data-property-short-name]').forEach((button) => button.addEventListener("click", () => setPropertyShortName(button.dataset.propertyShortName)));
-  $$('[data-property-home]').forEach((button) => button.addEventListener("click", () => toggleHomeProperty(button.dataset.propertyHome)));
+  $$('[data-property-export]').forEach((button) => button.addEventListener("click", () => { closeParentMenu(button); exportPropertyCsv(button.dataset.propertyExport); }));
+  $$('[data-property-short-name]').forEach((button) => button.addEventListener("click", () => { closeParentMenu(button); setPropertyShortName(button.dataset.propertyShortName); }));
+  $$('[data-property-home]').forEach((button) => button.addEventListener("click", () => { closeParentMenu(button); toggleHomeProperty(button.dataset.propertyHome); }));
 }
 
 async function setPropertyShortName(accountId) {
@@ -209,7 +330,45 @@ function propertyMetrics(property) {
 }
 
 function openPropertyPeople(accountId, status = "current") {
-  $("#property-filter").value = accountId; $("#status-filter").value = status; $("#staff-filter").value = ""; switchView("people");
+  $("#property-filter").value = accountId; $("#status-filter").value = status; $("#staff-filter").value = "";
+  switchRegisterMode("people"); switchView("people");
+}
+
+function changeBadgeInfo(event) {
+  if (event.direction === "positive") return { cls: "positive", label: "Activated" };
+  if (event.type === "not_returned") return { cls: "not-returned", label: "Not returned" };
+  if (event.type === "appeared") return { cls: "appeared", label: "Appeared" };
+  if (event.type === "status") return { cls: "neutral-change", label: "Status change" };
+  if (event.type === "expiration") return { cls: "neutral-change", label: "Expiration date" };
+  if (event.type === "received") return { cls: "neutral-change", label: "Received date" };
+  return { cls: "", label: event.type.replaceAll("_", " ") };
+}
+
+function changeRowHtml(event, property) {
+  const badge = changeBadgeInfo(event);
+  const propLabel = property ? propertyDisplayName(property) : (event.propertyName || "");
+  const preference = event.personKey ? personPreference(event.personKey) : {};
+  const canOpenPerson = event.personKey && state.people.some((item) => item.key === event.personKey);
+  const licenseLabel = event.license ? `Licence #${escapeHtml(event.license)}` : "No licence # (pending/application)";
+  const typeLabel = event.licenseType ? escapeHtml(event.licenseType) : "Licence record";
+  const dates = [
+    event.receivedDate ? `Received: ${formatDate(event.receivedDate)}` : "",
+    event.expirationDate ? `Exp: ${formatDate(event.expirationDate)}` : "",
+  ].filter(Boolean).join(" · ");
+  const personHeader = canOpenPerson
+    ? `<button type="button" class="change-person-link" data-person="${escapeHtml(event.personKey)}">${preference.starred ? '<span class="staff-star" aria-label="My Staff">★</span> ' : ""}${escapeHtml(event.person)}</button>`
+    : `<strong>${preference.starred ? '<span class="staff-star" aria-label="My Staff">★</span> ' : ""}${escapeHtml(event.person)}</strong>`;
+  return `<div class="change-row">
+    <span class="badge ${badge.cls}">${escapeHtml(badge.label)}</span>
+    <div class="change-main">
+      <div class="change-identity">${personHeader}<span class="change-license-pill">${licenseLabel}</span><span class="change-type">${typeLabel}</span>${propLabel ? `<span class="change-property">${escapeHtml(propLabel)}</span>` : ""}</div>
+      <small class="change-message">${escapeHtml(event.message)}</small>
+    </div>
+    <div class="change-dates">
+      ${event.status ? `<strong>WSGC: ${escapeHtml(event.status)}</strong>` : ""}
+      <small>${escapeHtml(dates || "No dates reported")}</small>
+    </div>
+  </div>`;
 }
 
 function openPropertyWorkspace(accountId, section = "") {
@@ -217,9 +376,12 @@ function openPropertyWorkspace(accountId, section = "") {
   const snapshot = state.snapshots.get(accountId); const metrics = propertyMetrics(property); const followed = metrics.people.filter((person) => personPreference(person).starred);
   const alerts = metrics.people.filter((person) => ["attention", "expiring10"].includes(person.bucket));
   const changes = state.changes.filter((event) => event.property.accountId === accountId);
-  $("#property-workspace-detail").innerHTML = `<div class="detail-head"><p class="kicker">MANAGED PROPERTY WORKSPACE</p><h2>${escapeHtml(property.name)}</h2><p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · "))} · ${snapshot ? `Refreshed ${formatTime(snapshot.retrievedAt)}` : "No roster loaded"}</p><div class="detail-actions"><button id="workspace-roster" class="button primary">View roster</button><button id="workspace-refresh" class="button secondary">Refresh</button><button id="workspace-export" class="button secondary">Export CSV</button></div></div><div class="workspace-stats"><button data-workspace-filter="current"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-workspace-filter="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-workspace-filter="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button data-workspace-filter="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-workspace-filter="expiring45"><span>Expiring ≤45 days</span><strong>${metrics.approaching45}</strong></button></div><section class="workspace-section"><div class="panel-head"><div><p class="section-number">MY STAFF</p><h3>Flagged at this property</h3></div></div>${followed.length ? followed.map(workspacePersonRow).join("") : `<div class="empty-inline">No flagged people appear in this property’s latest roster.</div>`}</section><section class="workspace-section"><div class="panel-head"><div><p class="section-number">REVIEW</p><h3>Needs attention</h3></div></div>${alerts.length ? alerts.map(workspacePersonRow).join("") : `<div class="empty-inline">Nothing currently appears in the attention queue.</div>`}</section><section id="property-workspace-changes" class="workspace-section"><div class="panel-head"><div><p class="section-number">CHANGES</p><h3>Latest observed differences</h3></div><span class="badge">${changes.length}</span></div>${changes.length ? changes.slice(0, 20).map((event) => `<div class="change-row"><span class="badge ${event.direction === "positive" ? "positive" : event.type === "not_returned" ? "not-returned" : ""}">${escapeHtml(event.type.replaceAll("_", " "))}</span><span><strong>${escapeHtml(event.person)}</strong><small>${escapeHtml(event.message)}</small></span><small>${escapeHtml(event.license || "")}</small></div>`).join("") : `<div class="empty-inline">A second successful refresh is needed before changes can be compared.</div>`}</section>`;
+  const pref = propertyPreference(property);
+  const hasCustomShort = Boolean(pref.shortName && pref.shortName !== property.name);
+  $("#property-workspace-detail").innerHTML = `<div class="detail-head"><p class="kicker">MANAGED PROPERTY WORKSPACE</p><h2>${escapeHtml(propertyDisplayName(property))}</h2>${hasCustomShort ? `<p class="official-property-name">Official WSGC name: ${escapeHtml(property.name)}</p>` : ""}<p>${escapeHtml([property.city, property.county].filter(Boolean).join(" · "))} · ${snapshot ? `Refreshed ${formatTime(snapshot.retrievedAt)}` : "No roster loaded"}</p><div class="detail-actions"><button id="workspace-roster" class="button primary">View people</button><button id="workspace-records" class="button secondary">View licence records</button><button id="workspace-refresh" class="button secondary">Refresh</button><button id="workspace-export" class="button secondary">Export CSV</button></div></div><div class="workspace-stats"><button data-workspace-filter="current"><span>People shown</span><strong>${metrics.people.length}</strong></button><button data-workspace-filter="active"><span>Active shown</span><strong>${metrics.active}</strong></button><button data-workspace-filter="pending"><span>Pending / renewal</span><strong>${metrics.pending}</strong></button><button data-workspace-filter="attention"><span>Needs attention</span><strong>${metrics.attention}</strong></button><button data-workspace-filter="expiring45"><span>Expiring ≤45 days</span><strong>${metrics.approaching45}</strong></button></div><section class="workspace-section"><div class="panel-head"><div><p class="section-number">MY STAFF</p><h3>Flagged at this property</h3></div></div>${followed.length ? followed.map(workspacePersonRow).join("") : `<div class="empty-inline">No flagged people appear in this property’s latest roster.</div>`}</section><section class="workspace-section"><div class="panel-head"><div><p class="section-number">REVIEW</p><h3>Needs attention</h3></div></div>${alerts.length ? alerts.map(workspacePersonRow).join("") : `<div class="empty-inline">Nothing currently appears in the attention queue.</div>`}</section><section id="property-workspace-changes" class="workspace-section"><div class="panel-head"><div><p class="section-number">CHANGES</p><h3>Latest observed differences</h3></div><span class="badge">${changes.length}</span></div>${changes.length ? changes.slice(0, 20).map((event) => changeRowHtml(event, property)).join("") : `<div class="empty-inline">A second successful refresh is needed before changes can be compared.</div>`}</section>`;
   const dialog = $("#property-workspace-dialog"); dialog.showModal();
   $("#workspace-roster").addEventListener("click", () => { dialog.close(); openPropertyPeople(accountId); });
+  $("#workspace-records").addEventListener("click", () => { dialog.close(); $("#records-property-filter").value = accountId; $("#records-status-filter").value = ""; $("#records-staff-filter").value = ""; switchRegisterMode("records"); switchView("people"); });
   $("#workspace-refresh").addEventListener("click", async (event) => { await refreshProperty(accountId, event.currentTarget); dialog.close(); openPropertyWorkspace(accountId); });
   $("#workspace-export").addEventListener("click", () => exportPropertyCsv(accountId));
   $$('[data-workspace-filter]').forEach((button) => button.addEventListener("click", () => { dialog.close(); openPropertyPeople(accountId, button.dataset.workspaceFilter); }));
@@ -230,14 +392,31 @@ function openPropertyWorkspace(accountId, section = "") {
 function workspacePersonRow(person) { const preference = personPreference(person); return `<button class="compact-row person-link" data-person="${escapeHtml(person.key)}"><span><strong>${escapeHtml(person.fullName)}</strong><small>${escapeHtml([preference.department, ...(preference.tags || [])].filter(Boolean).join(" · ") || attentionSummary(person))}</small></span><span class="badge ${person.bucket}">${bucketLabel(person.bucket)}</span></button>`; }
 
 function renderChanges() {
-  const grouped = new Map(); for (const event of state.changes) { if (!grouped.has(event.property.accountId)) grouped.set(event.property.accountId, { property: event.property, events: [] }); grouped.get(event.property.accountId).events.push(event); }
+  const grouped = new Map();
+  for (const property of sortedProperties()) {
+    const events = state.changes.filter((event) => event.property.accountId === property.accountId);
+    if (events.length) grouped.set(property.accountId, { property, events });
+  }
+  for (const event of state.changes) {
+    if (!grouped.has(event.property.accountId)) grouped.set(event.property.accountId, { property: event.property, events: [] });
+    if (!grouped.get(event.property.accountId).events.includes(event)) grouped.get(event.property.accountId).events.push(event);
+  }
   $("#change-count").textContent = state.changes.length; $("#change-count").classList.toggle("hidden", !state.changes.length);
-  $("#changes-list").innerHTML = grouped.size ? [...grouped.values()].map(({ property, events }) => `<section class="change-group"><h3>${escapeHtml(property.name)} <span class="badge">${events.length} changes</span></h3>${events.map((event) => `<div class="change-row"><span class="badge ${event.direction === "positive" ? "positive" : event.type === "not_returned" ? "not-returned" : ""}">${escapeHtml(event.type.replaceAll("_", " "))}</span><span><strong>${escapeHtml(event.person)}</strong><small>${escapeHtml(event.message)}</small></span><small>${escapeHtml(event.license || "")}</small></div>`).join("")}</section>`).join("") : `<div class="empty-state"><h2>No comparison available</h2><p>Changes appear after a property has two successful saved refreshes.</p></div>`;
+  $("#changes-list").innerHTML = grouped.size ? [...grouped.values()].map(({ property, events }) => {
+    const pref = propertyPreference(property);
+    const hasCustomShort = Boolean(pref.shortName && pref.shortName !== property.name);
+    const sample = events[0] || {};
+    const windowCopy = sample.previousRetrievedAt && sample.currentRetrievedAt
+      ? `Compared ${formatTime(sample.previousRetrievedAt)} → ${formatTime(sample.currentRetrievedAt)}`
+      : "Latest two accepted snapshots";
+    return `<section class="change-group"><div class="change-group-head"><div><h3>${escapeHtml(propertyDisplayName(property))} <span class="badge">${events.length} ${events.length === 1 ? "change" : "changes"}</span></h3>${hasCustomShort ? `<small class="official-property-name">Official WSGC name: ${escapeHtml(property.name)}</small>` : ""}</div><small class="change-window">${escapeHtml(windowCopy)}</small></div>${events.map((event) => changeRowHtml(event, property)).join("")}</section>`;
+  }).join("") : `<div class="empty-state"><h2>No comparison available</h2><p>Changes appear after a property has two successful saved refreshes.</p></div>`;
+  bindPersonLinks();
 }
 
 function bindPersonLinks() { $$('[data-person]').forEach((row) => { row.onclick = () => openPerson(row.dataset.person); }); }
-function propertyStandingChips(person) { return person.propertyStandings.map((standing) => { const managed = state.properties.find((property) => property.accountId === standing.accountId); const label = managed ? propertyDisplayName(managed) : shortName(standing.name); return `<span class="property-chip ${standing.bucket}" title="${escapeHtml(standing.name)}"><span>${escapeHtml(label)}</span><strong>${bucketLabel(standing.bucket)}</strong></span>`; }).join(" "); }
-function attentionSummary(person) { return person.propertyStandings.filter((standing) => ["attention", "expiring10"].includes(standing.bucket)).map((standing) => `${shortName(standing.name)}: ${bucketLabel(standing.bucket)}`).join(" · ") || person.properties.map((property) => property.name).join(" · "); }
+function propertyStandingChips(person) { return person.propertyStandings.map((standing) => { const label = propertyChipLabel(standing); return `<span class="property-chip ${standing.bucket}" title="${escapeHtml(standing.name)}"><span>${escapeHtml(label)}</span><strong>${bucketLabel(standing.bucket)}</strong></span>`; }).join(" "); }
+function attentionSummary(person) { return person.propertyStandings.filter((standing) => ["attention", "expiring10"].includes(standing.bucket)).map((standing) => `${propertyChipLabel(standing)}: ${bucketLabel(standing.bucket)}`).join(" · ") || person.properties.map((property) => propertyDisplayName(property)).join(" · "); }
 function licenseCard(license, outside = false) { return `<section class="license-card ${license.superseded ? "prior-record" : ""}"><div class="license-top"><div><strong>${escapeHtml(license.licenseType || "License record")}</strong><small>${escapeHtml(license.propertyName)}${outside ? " · Public individual lookup" : ""}${license.superseded ? ` · Prior record replaced by ${escapeHtml(license.supersededBy || "a renewed license")}` : ""}</small></div><span class="badge ${license.superseded ? "superseded" : license.bucket}">${license.superseded ? "Renewed" : bucketLabel(license.bucket)}</span></div><dl><div><dt>License number</dt><dd>${escapeHtml(license.licenseNumber || "—")}</dd></div><div><dt>WSGC status</dt><dd>${escapeHtml(license.status)}</dd></div><div><dt>Received date</dt><dd>${formatDate(license.receivedDate)}</dd></div><div><dt>Expiration</dt><dd>${formatDate(license.expirationDate)}</dd></div></dl></section>`; }
 function openPerson(key) {
   const person = state.people.find((item) => item.key === key); if (!person) return;
@@ -332,6 +511,35 @@ function confirmAction(title, copy, action = "Delete") { const dialog = $("#conf
 function csvRows(people) { const rows = [["Person", "Contact ID", "Managed property", "Property standing", "License number", "License type", "WSGC status", "Received date", "Expiration", "Workbench record", "My Staff", "Local department", "Local tags"]]; for (const person of people) for (const license of person.licenses) { const standing = person.propertyStandings.find((item) => item.accountId === license.propertyId); const preference = personPreference(person); rows.push([person.fullName, person.contactId, license.propertyName, bucketLabel(standing?.bucket || license.bucket), license.licenseNumber, license.licenseType, license.status, license.receivedDate, license.expirationDate, license.superseded ? `Prior record; renewed as ${license.supersededBy || "new license"}` : "Current record", preference.starred ? "Yes" : "No", preference.department || "", (preference.tags || []).join("; ")]); } return rows; }
 function downloadCsv(filename, people) { download(filename, csvRows(people).map((row) => row.map(csvCell).join(",")).join("\n"), "text/csv"); }
 function exportCsv() { downloadCsv(`wsgc-roster-${new Date().toISOString().slice(0,10)}.csv`, filteredPeople()); }
+function recordCsvRows(records) {
+  const rows = [["Person", "Contact ID", "Licence number", "Licence type", "WSGC status", "Received Date", "Expiration Date", "Managed property", "Property short name", "Classification", "Multi-property observation", "My Staff", "Local department", "Local tags"]];
+  for (const record of records) {
+    const preference = personPreference(record.personKey);
+    const managed = state.properties.find((item) => item.accountId === record.propertyId);
+    const shortLabel = managed ? propertyDisplayName(managed) : record.propertyName;
+    const classification = record.superseded ? `Superseded by ${record.supersededBy || "newer licence"}` : record.bucket === "historical" ? "Historical / inactive" : `Current (${bucketLabel(record.bucket)})`;
+    rows.push([
+      record.fullName,
+      record.contactId,
+      record.licenseNumber,
+      record.licenseType,
+      record.status,
+      record.receivedDate,
+      record.expirationDate,
+      record.propertyName,
+      shortLabel,
+      classification,
+      record.duplicateAcrossProperties ? `Observed at ${record.propertyObservationCount} properties` : "Single property",
+      preference.starred ? "Yes" : "No",
+      preference.department || "",
+      (preference.tags || []).join("; "),
+    ]);
+  }
+  return rows;
+}
+function exportRecordsCsv() {
+  download(`wsgc-licence-records-${new Date().toISOString().slice(0,10)}.csv`, recordCsvRows(filteredRecords()).map((row) => row.map(csvCell).join(",")).join("\n"), "text/csv");
+}
 function exportPropertyCsv(accountId) { const property = state.properties.find((item) => item.accountId === accountId); if (!property) return; downloadCsv(`${safeFilename(property.name)}-${new Date().toISOString().slice(0,10)}.csv`, propertyPeople(property)); }
 
 function exportSettings() { const backup = createSettingsBackup(state.properties, state.workspace); download(`licence-desk-settings-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(backup, null, 2), "application/json"); }
@@ -353,7 +561,7 @@ function download(filename, text, type) { const url = URL.createObjectURL(new Bl
 function csvCell(value) { const text = String(value ?? ""); return /[",\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text; }
 function safeFilename(value) { return String(value || "property").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "property"; }
 function bucketLabel(bucket) { return ({ active: "Active", pending: "Pending", renewalPending: "Renewal pending", historical: "Historical / inactive", attention: "Needs attention", expiring10: "Expires ≤10 days", approaching: "Expires ≤45 days" })[bucket] || bucket; }
-function shortName(name) { return name.replace(/casino|cardroom|card room/ig, "").trim() || name; }
+function shortName(name) { return name.replace(/casino|cardroom|card room/ig, "").replace(/\s+/g, " ").trim() || name; }
 function showNotice(message, error = false) { const notice = $("#notice"); notice.textContent = message; notice.className = error ? "notice error" : "notice"; clearTimeout(showNotice.timer); showNotice.timer = setTimeout(() => notice.classList.add("hidden"), error ? 12000 : 5000); }
 
 initialize().catch((error) => showNotice(`Could not start the Workbench: ${error.message}`, true));

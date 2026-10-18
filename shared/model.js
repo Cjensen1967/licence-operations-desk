@@ -115,6 +115,41 @@
     };
   }
 
+  function isActiveStatusLabel(status) {
+    const value = lower(status);
+    if (!value) return false;
+    if (
+      value.includes("inactive") ||
+      value.includes("invalid") ||
+      value.includes("not active") ||
+      value.includes("non-active") ||
+      value.includes("nonactive") ||
+      value.includes("not valid") ||
+      value.includes("pending") ||
+      value.includes("application") ||
+      value.includes("expir") ||
+      value.includes("revok") ||
+      value.includes("suspend") ||
+      value.includes("cancel") ||
+      value.includes("deni") ||
+      value.includes("withdraw")
+    ) {
+      return false;
+    }
+    return /\b(active|current|valid)\b/.test(value);
+  }
+
+  function isPositiveStatusTransition(fromStatus, toStatus) {
+    const oldStatus = lower(fromStatus);
+    if (!isActiveStatusLabel(toStatus)) return false;
+    return (
+      oldStatus.includes("pending") ||
+      oldStatus.includes("application") ||
+      oldStatus.includes("inactive") ||
+      oldStatus.includes("expir")
+    );
+  }
+
   function statusBucket(status, expirationDate, now = new Date()) {
     const value = lower(status);
     const days = daysUntil(expirationDate, now);
@@ -127,7 +162,7 @@
     // An ostensibly current/unknown record with a date already past is
     // contradictory and does deserve review.
     if (days !== null && days < 0) return "attention";
-    if (value.includes("active") || value.includes("current") || value.includes("valid")) {
+    if (isActiveStatusLabel(value)) {
       if (days !== null && days <= 10) return "expiring10";
       if (days !== null && days <= 45) return "approaching";
       return "active";
@@ -211,9 +246,146 @@
     }).sort((a, b) => a.fullName.localeCompare(b.fullName));
   }
 
+  function buildLicenseRecords(properties, snapshots, now = new Date()) {
+    const propertyMap = new Map((properties || []).map((property) => [property.accountId, property]));
+    const rawObservations = [];
+    for (const snapshot of snapshots || []) {
+      const property = propertyMap.get(snapshot.accountId);
+      if (!property) continue;
+      const individuals = snapshot.individuals || [];
+      for (let index = 0; index < individuals.length; index += 1) {
+        const raw = individuals[index];
+        const license = normalizeLicense(raw, property);
+        const bucket = statusBucket(license.status, license.expirationDate, now);
+        const daysRemaining = daysUntil(license.expirationDate, now);
+        const cleanNumber = clean(license.licenseNumber);
+        const hasLicenseNumber = Boolean(cleanNumber);
+        // Documented licence identity rule:
+        // - Records with a WSGC licence number share a canonical numbered key so
+        //   duplicate observations across properties can be counted without
+        //   discarding any property observation row.
+        // - Records without a licence number (e.g., pending applications) never
+        //   merge with other unnumbered records.
+        const uniqueLicenseKey = hasLicenseNumber
+          ? `number:${lower(cleanNumber)}`
+          : `unnumbered:${property.accountId}:${index}:${license.personKey}:${lower(license.licenseType)}`;
+        rawObservations.push({
+          ...license,
+          observationKey: `${property.accountId}:${index}:${license.personKey}:${lower(cleanNumber || license.licenseType)}`,
+          uniqueLicenseKey,
+          hasLicenseNumber,
+          bucket,
+          daysRemaining,
+        });
+      }
+    }
+
+    const byPerson = new Map();
+    for (const item of rawObservations) {
+      if (!byPerson.has(item.personKey)) byPerson.set(item.personKey, []);
+      byPerson.get(item.personKey).push(item);
+    }
+    const supersededByObsKey = new Map();
+    for (const personRecords of byPerson.values()) {
+      for (const marked of markRenewedRecords(personRecords)) {
+        supersededByObsKey.set(marked.observationKey, {
+          superseded: Boolean(marked.superseded),
+          supersededBy: marked.supersededBy || "",
+        });
+      }
+    }
+
+    const keyCounts = new Map();
+    const keyProperties = new Map();
+    for (const item of rawObservations) {
+      keyCounts.set(item.uniqueLicenseKey, (keyCounts.get(item.uniqueLicenseKey) || 0) + 1);
+      if (!keyProperties.has(item.uniqueLicenseKey)) keyProperties.set(item.uniqueLicenseKey, new Set());
+      keyProperties.get(item.uniqueLicenseKey).add(item.propertyId);
+    }
+
+    return rawObservations
+      .map((item) => {
+        const renewal = supersededByObsKey.get(item.observationKey) || { superseded: false, supersededBy: "" };
+        const observationCount = keyCounts.get(item.uniqueLicenseKey) || 1;
+        const propertyObservationCount = keyProperties.get(item.uniqueLicenseKey)?.size || 1;
+        const classification = renewal.superseded
+          ? "superseded"
+          : item.bucket === "historical"
+            ? "historical"
+            : "current";
+        return {
+          ...item,
+          superseded: renewal.superseded,
+          supersededBy: renewal.supersededBy,
+          classification,
+          observationCount,
+          propertyObservationCount,
+          duplicateAcrossProperties: item.hasLicenseNumber && propertyObservationCount > 1,
+        };
+      })
+      .sort((a, b) =>
+        a.fullName.localeCompare(b.fullName) ||
+        a.propertyName.localeCompare(b.propertyName) ||
+        a.licenseNumber.localeCompare(b.licenseNumber) ||
+        a.licenseType.localeCompare(b.licenseType),
+      );
+  }
+
+  function summarizeLicenseRecords(records = []) {
+    const uniqueKeys = new Set();
+    const numberedKeys = new Set();
+    const multiPropertyKeys = new Set();
+    let unnumberedRecords = 0;
+    let duplicateObservations = 0;
+    let currentObservations = 0;
+    let historicalObservations = 0;
+    let supersededObservations = 0;
+
+    for (const record of records) {
+      uniqueKeys.add(record.uniqueLicenseKey);
+      if (record.hasLicenseNumber) {
+        if (numberedKeys.has(record.uniqueLicenseKey)) duplicateObservations += 1;
+        numberedKeys.add(record.uniqueLicenseKey);
+        if (record.propertyObservationCount > 1) multiPropertyKeys.add(record.uniqueLicenseKey);
+      } else {
+        unnumberedRecords += 1;
+      }
+      if (record.superseded) supersededObservations += 1;
+      else if (record.bucket === "historical") historicalObservations += 1;
+      else currentObservations += 1;
+    }
+
+    return {
+      observations: records.length,
+      uniqueLicenses: uniqueKeys.size,
+      uniqueNumberedLicenses: numberedKeys.size,
+      unnumberedRecords,
+      duplicateObservations,
+      multiPropertyLicenses: multiPropertyKeys.size,
+      currentObservations,
+      historicalObservations,
+      supersededObservations,
+    };
+  }
+
   function recordKey(record) {
     const normalized = normalizeLicense(record, { accountId: "", name: "" });
     return `${normalized.personKey}|${lower(normalized.licenseNumber || normalized.licenseType)}`;
+  }
+
+  function changeEventBase(value, current) {
+    return {
+      personKey: value.personKey,
+      contactId: value.contactId,
+      person: value.fullName,
+      license: value.licenseNumber,
+      licenseType: value.licenseType,
+      status: value.status,
+      receivedDate: value.receivedDate,
+      expirationDate: value.expirationDate,
+      propertyId: current.accountId || value.propertyId || "",
+      propertyName: current.propertyName || value.propertyName || "",
+    };
   }
 
   function compareSnapshots(previous, current) {
@@ -222,21 +394,57 @@
     const after = new Map((current.individuals || []).map((record) => [recordKey(record), normalizeLicense(record, { accountId: current.accountId, name: current.propertyName || "" })]));
     const events = [];
     for (const [key, value] of after) {
-      if (!before.has(key)) events.push({ type: "appeared", personKey: value.personKey, person: value.fullName, license: value.licenseNumber, message: "Appeared in the latest WSGC response" });
-      else {
+      if (!before.has(key)) {
+        events.push({
+          ...changeEventBase(value, current),
+          type: "appeared",
+          direction: "neutral",
+          message: "Appeared in the latest WSGC response",
+        });
+      } else {
         const old = before.get(key);
         if (old.status !== value.status) {
-          const oldStatus = lower(old.status); const newStatus = lower(value.status);
-          const positive = (newStatus.includes("active") || newStatus.includes("current") || newStatus.includes("valid")) &&
-            (oldStatus.includes("pending") || oldStatus.includes("application") || oldStatus.includes("inactive") || oldStatus.includes("expired"));
-          events.push({ type: "status", direction: positive ? "positive" : "neutral", personKey: value.personKey, person: value.fullName, license: value.licenseNumber, fromStatus: old.status, toStatus: value.status, message: `Status changed: ${old.status || "Unknown"} → ${value.status || "Unknown"}` });
+          const positive = isPositiveStatusTransition(old.status, value.status);
+          events.push({
+            ...changeEventBase(value, current),
+            type: "status",
+            direction: positive ? "positive" : "neutral",
+            fromStatus: old.status,
+            toStatus: value.status,
+            message: `Status changed: ${old.status || "Unknown"} → ${value.status || "Unknown"}`,
+          });
         }
-        if (old.expirationDate !== value.expirationDate) events.push({ type: "expiration", person: value.fullName, license: value.licenseNumber, message: `Expiration changed: ${old.expirationDate || "None"} → ${value.expirationDate || "None"}` });
-        if (old.receivedDate !== value.receivedDate) events.push({ type: "received", person: value.fullName, license: value.licenseNumber, message: `Received date changed: ${old.receivedDate || "None"} → ${value.receivedDate || "None"}` });
+        if (old.expirationDate !== value.expirationDate) {
+          events.push({
+            ...changeEventBase(value, current),
+            type: "expiration",
+            direction: "neutral",
+            fromDate: old.expirationDate,
+            toDate: value.expirationDate,
+            message: `Expiration changed: ${old.expirationDate || "None"} → ${value.expirationDate || "None"}`,
+          });
+        }
+        if (old.receivedDate !== value.receivedDate) {
+          events.push({
+            ...changeEventBase(value, current),
+            type: "received",
+            direction: "neutral",
+            fromDate: old.receivedDate,
+            toDate: value.receivedDate,
+            message: `Received date changed: ${old.receivedDate || "None"} → ${value.receivedDate || "None"}`,
+          });
+        }
       }
     }
     for (const [key, value] of before) {
-      if (!after.has(key)) events.push({ type: "not_returned", personKey: value.personKey, person: value.fullName, license: value.licenseNumber, message: "Was not present in the latest WSGC response" });
+      if (!after.has(key)) {
+        events.push({
+          ...changeEventBase(value, current),
+          type: "not_returned",
+          direction: "neutral",
+          message: "Was not present in the latest WSGC response",
+        });
+      }
     }
     return { available: true, events };
   }
@@ -259,5 +467,22 @@
     };
   }
 
-  return { first, parseDate, daysUntil, normalizeOrganization, normalizeLicense, normalizeIndividualLicense, statusBucket, markRenewedRecords, standingForLicenses, buildPeople, compareSnapshots, summarize };
+  return {
+    first,
+    parseDate,
+    daysUntil,
+    normalizeOrganization,
+    normalizeLicense,
+    normalizeIndividualLicense,
+    isActiveStatusLabel,
+    isPositiveStatusTransition,
+    statusBucket,
+    markRenewedRecords,
+    standingForLicenses,
+    buildPeople,
+    buildLicenseRecords,
+    summarizeLicenseRecords,
+    compareSnapshots,
+    summarize,
+  };
 });

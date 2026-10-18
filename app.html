@@ -14,11 +14,11 @@
       <div class="brand"><img class="brand-mark" src="icons/icon48.png" alt="" width="42" height="42"><div><strong>Licence Operations</strong><small>Washington public records desk</small></div></div>
       <nav aria-label="Primary navigation">
         <button class="nav-item active" data-view="overview"><span>01</span> Briefing</button>
-        <button class="nav-item" data-view="people"><span>02</span> People</button>
+        <button class="nav-item" data-view="people"><span>02</span> People &amp; Licences</button>
         <button class="nav-item" data-view="properties"><span>03</span> Properties</button>
         <button class="nav-item" data-view="changes"><span>04</span> Changes <b id="change-count" class="count hidden"></b></button>
       </nav>
-      <div class="sidebar-note"><span class="privacy-dot"></span><div><strong>Local workspace</strong><small>Saved records remain in this browser profile.</small></div></div>
+      <div class="sidebar-note"><span class="privacy-dot"></span><div><strong>Local workspace</strong><small>Saved records remain in this browser profile.</small><button id="sidebar-about" type="button" class="sidebar-link">About &amp; acknowledgements</button></div></div>
     </aside>
 
     <main>
@@ -29,7 +29,7 @@
           <button id="add-property" class="button secondary">Add property</button>
           <button id="refresh-all" class="button primary">Refresh portfolio</button>
           <button id="more-button" class="icon-button" aria-label="Workspace actions">•••</button>
-          <div id="more-menu" class="menu hidden"><button id="export-csv">Export current people to CSV</button><button id="export-settings">Export settings only</button><button id="import-settings">Import settings only</button><hr><button id="export-backup">Export full local backup</button><button id="import-backup">Restore full backup</button><button id="clear-data" class="danger-text">Delete local workspace</button></div>
+          <div id="more-menu" class="menu hidden"><button id="export-csv">Export people register to CSV</button><button id="export-records-csv">Export licence records to CSV</button><button id="export-settings">Export settings only</button><button id="import-settings">Import settings only</button><hr><button id="export-backup">Export full local backup</button><button id="import-backup">Restore full backup</button><hr><button id="open-about">About &amp; acknowledgements</button><button id="clear-data" class="danger-text">Delete local workspace</button></div>
           <input id="backup-file" type="file" accept="application/json" hidden>
           <input id="settings-file" type="file" accept="application/json" hidden>
         </div>
@@ -56,9 +56,68 @@
       </section>
 
       <section id="people-view" class="view">
-        <div class="register-heading"><div><p class="eyebrow">PERSON-CENTRIC REGISTER</p><h2>One person, every returned record</h2></div><p>License number is never used as person identity.</p></div>
-        <div class="toolbar"><label class="search-box"><span>⌕</span><input id="people-search" type="search" placeholder="Search name, license, property, department or tag"></label><select id="property-filter" aria-label="Filter by property"><option value="">All managed properties</option></select><select id="staff-filter" aria-label="Filter by manager flag"><option value="">Everyone</option><option value="starred">My staff</option></select><select id="status-filter" aria-label="Filter by status"><option value="current">Current observations</option><option value="attention">Needs attention</option><option value="expiring45">Expires within 45 days</option><option value="expiring10">Expires within 10 days</option><option value="active">Active shown</option><option value="pending">Pending shown</option><option value="historical">Historical / inactive shown</option><option value="" selected>All returned people (unfiltered status)</option></select><button id="show-all-people" type="button" class="button secondary">Show all people</button><span id="people-result-count" class="result-count"></span></div>
-        <div class="table-wrap people-table-wrap"><table><thead><tr><th data-sort="fullName">Person</th><th>Property observation</th><th>Returned records</th><th data-sort="nearestDays">Nearest expiration</th><th>Review state</th></tr></thead><tbody id="people-table"></tbody></table></div>
+        <div class="register-switcher" role="tablist" aria-label="Register view mode">
+          <button id="tab-people-register" type="button" class="register-tab active" data-register-mode="people" role="tab" aria-selected="true">
+            <strong>People register</strong>
+            <small>Person-centric · groups returned records by individual</small>
+          </button>
+          <button id="tab-records-register" type="button" class="register-tab" data-register-mode="records" role="tab" aria-selected="false">
+            <strong>All licence records</strong>
+            <small>Record-centric · one row per returned licence observation</small>
+          </button>
+        </div>
+
+        <div id="people-register-panel">
+          <div class="register-heading"><div><p class="eyebrow">PERSON-CENTRIC REGISTER</p><h2>One person, every returned record</h2></div><p>Licence number is never used as person identity.</p></div>
+          <div class="toolbar">
+            <label class="search-box"><span>⌕</span><input id="people-search" type="search" placeholder="Search name, licence #, property, department or tag"></label>
+            <select id="property-filter" aria-label="Filter by property"><option value="">All managed properties</option></select>
+            <select id="staff-filter" aria-label="Filter by manager flag"><option value="">Everyone</option><option value="starred">My Staff only</option></select>
+            <select id="status-filter" aria-label="Filter by status">
+              <option value="" selected>All returned people</option>
+              <option value="current">Current observations</option>
+              <option value="attention">Needs attention</option>
+              <option value="expiring45">Expires within 45 days</option>
+              <option value="expiring10">Expires within 10 days</option>
+              <option value="active">Active shown</option>
+              <option value="pending">Pending / renewal shown</option>
+              <option value="historical">Historical / inactive shown</option>
+            </select>
+            <div class="toolbar-actions">
+              <button id="show-all-people" type="button" class="button secondary">Show all people</button>
+              <span id="people-result-count" class="result-count"></span>
+            </div>
+          </div>
+          <div class="table-wrap people-table-wrap"><table><thead><tr><th data-sort="fullName">Person</th><th>Property observation</th><th>Returned records</th><th data-sort="nearestDays">Nearest expiration</th><th>Review state</th></tr></thead><tbody id="people-table"></tbody></table></div>
+        </div>
+
+        <div id="records-register-panel" class="hidden">
+          <div class="register-heading"><div><p class="eyebrow">RECORD-CENTRIC REGISTER</p><h2>All returned licence records</h2></div><p>Every returned WSGC licence observation and its property association. Duplicate observations across properties are preserved.</p></div>
+          <div id="records-summary-bar" class="records-summary-bar" role="status"></div>
+          <div class="toolbar">
+            <label class="search-box"><span>⌕</span><input id="records-search" type="search" placeholder="Search person, licence #, type, status, property or tag"></label>
+            <select id="records-property-filter" aria-label="Filter records by property"><option value="">All managed properties</option></select>
+            <select id="records-staff-filter" aria-label="Filter records by manager flag"><option value="">Everyone</option><option value="starred">My Staff only</option></select>
+            <select id="records-status-filter" aria-label="Filter records by status or classification">
+              <option value="" selected>All returned records</option>
+              <option value="current">Current records only</option>
+              <option value="active">Active</option>
+              <option value="pending">Pending / application</option>
+              <option value="expiring45">Expires within 45 days</option>
+              <option value="expiring10">Expires within 10 days</option>
+              <option value="attention">Needs attention</option>
+              <option value="historical">Historical / expired / inactive</option>
+              <option value="superseded">Superseded / renewed</option>
+              <option value="duplicates">Observed at multiple properties</option>
+            </select>
+            <div class="toolbar-actions">
+              <button id="show-all-records" type="button" class="button secondary">Show all records</button>
+              <button id="export-records-inline" type="button" class="button quiet">Export CSV</button>
+              <span id="records-result-count" class="result-count"></span>
+            </div>
+          </div>
+          <div class="table-wrap records-table-wrap"><table><thead><tr><th data-record-sort="fullName">Person</th><th data-record-sort="licenseNumber">Licence number</th><th data-record-sort="licenseType">Licence type</th><th data-record-sort="status">WSGC status</th><th data-record-sort="receivedDate">Received Date</th><th data-record-sort="daysRemaining">Expiration Date</th><th data-record-sort="propertyName">Managed property</th><th data-record-sort="classification">Classification</th></tr></thead><tbody id="records-table"></tbody></table></div>
+        </div>
       </section>
 
       <section id="properties-view" class="view"><div class="register-heading"><div><p class="eyebrow">MANAGED SCOPE</p><h2>Property workspaces</h2></div><p>Each property retains its own accepted snapshots.</p></div><div id="properties-grid" class="property-grid"></div></section>
@@ -72,6 +131,31 @@
   <dialog id="property-workspace-dialog"><div class="dialog-shell property-workspace-dialog"><button id="property-workspace-close" class="dialog-close" aria-label="Close">×</button><div id="property-workspace-detail"></div></div></dialog>
   <dialog id="settings-import-dialog"><div class="dialog-shell confirm"><h2>Import workspace settings</h2><p id="settings-import-summary"></p><p class="dialog-copy">This file does not contain roster snapshots or credentials. Merge keeps existing selections and labels; replace resets those settings to the file.</p><div class="dialog-actions"><button id="settings-import-cancel" class="button secondary">Cancel</button><button id="settings-import-merge" class="button secondary">Merge</button><button id="settings-import-replace" class="button primary">Replace settings</button></div></div></dialog>
   <dialog id="confirm-dialog"><form method="dialog" class="dialog-shell confirm"><h2 id="confirm-title">Confirm</h2><p id="confirm-copy"></p><div class="dialog-actions"><button value="cancel" class="button secondary">Cancel</button><button value="confirm" class="button danger">Delete</button></div></form></dialog>
+  <dialog id="about-dialog">
+    <div class="dialog-shell about-dialog">
+      <button id="about-close" type="button" class="dialog-close" aria-label="Close">×</button>
+      <p class="kicker">APPLICATION INFORMATION · LOCAL WORKSPACE</p>
+      <h2>Licence Operations Desk</h2>
+      <p class="dialog-copy">Version 1.0.5 workspace · Published manifest baseline 1.0.4</p>
+      <section class="about-section">
+        <h3>Operational purpose &amp; local privacy</h3>
+        <p>Licence Operations Desk organizes public Washington State gambling-licence records returned by the Washington State Gambling Commission (WSGC) public License Lookup into an attention-first local workspace.</p>
+        <p>Managed properties, accepted roster snapshots, change comparisons, My Staff flags, departments, and local tags are stored locally in this browser profile. Network requests are user-initiated only.</p>
+      </section>
+      <section class="about-section">
+        <h3>Independence &amp; regulatory scope</h3>
+        <p>Licence Operations Desk is an independent project and is not affiliated with, endorsed by, or sponsored by WSGC. Public lookup observations and local organizational labels are review aids, not employment, licensing, or enforcement determinations.</p>
+      </section>
+      <section class="about-section acknowledgement-box">
+        <h3>Acknowledgements</h3>
+        <p><strong>Thanks to Ryan Wilson for early testing, feedback, and feature suggestions that helped improve Licence Operations Desk.</strong></p>
+        <small>Contributors and testers do not maintain this software and are not responsible for workspace operation or compliance reviews.</small>
+      </section>
+      <div class="dialog-actions">
+        <button id="about-ok" type="button" class="button primary">Close</button>
+      </div>
+    </div>
+  </dialog>
   <script src="shared/model.js"></script><script src="shared/workspace.js"></script><script src="db.js"></script><script src="app.js"></script>
 </body>
 </html>

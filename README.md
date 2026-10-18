@@ -6,19 +6,21 @@ The extension is designed as a local, attention-first workspace for licensing an
 
 ## Current status
 
-Current development version: **1.0.4**
+Published extension version: **1.0.4**  
+Current workspace development candidate: **1.0.5**
 
-Version 1.0.4 remains the published baseline. The approved v1.0.5 work is being developed and reviewed without changing the manifest version prematurely. See [ROADMAP.md](ROADMAP.md).
+Version 1.0.4 remains the published store baseline and `manifest.json` version until final release packaging. See [ROADMAP.md](ROADMAP.md).
 
-The current development branch adds:
+The v1.0.5 release candidate includes:
 
-- local **My Staff** flags, departments, and tags that survive roster refreshes;
-- property dashboards and property-specific review workspaces;
-- settings-only JSON export/import with merge and replace choices;
-- full-backup support for workspace labels; and
-- responsive stacked records and touch-friendly dialogs for narrow screens.
+- **Person-centric and record-centric registers:** switch between the **People register** (grouped by individual) and the **All licence records** register (one row per returned WSGC licence observation and its managed property association, with returned observation counts distinguished from unique licence counts);
+- **Local My Staff & property preferences:** locally flag people you oversee with optional department and tags, assign local property short names while retaining official WSGC property names, and designate a single **Home property** that sorts first;
+- **Operational Changes log:** record-specific change events displaying the person, licence number, licence type, managed property, relevant dates, and strict positive-transition highlighting (`Pending Activation → Active`) without false-positive substring matches;
+- **Actionable property dashboards and workspaces:** property cards and property-specific modal workspaces with freshness indicators, failure warnings that preserve prior snapshots, and direct roster/record/CSV actions;
+- **Settings-only JSON portability and full backups:** export/import workspace settings with merge and replace modes (excluding roster snapshots, history, credentials, cookies, and tokens), plus schema v2 full backups;
+- **Responsive layout and application information:** narrow-screen stacked tables, full-viewport dialogs, and an in-extension **About & acknowledgements** dialog.
 
-Manager labels are stored locally and displayed separately from public WSGC facts. They are organizational aids, not employment, disciplinary, enforcement, or legal conclusions.
+Manager labels and short names are stored locally and displayed separately from public WSGC facts. They are organizational aids, not employment, disciplinary, enforcement, or legal conclusions.
 
 ## Design principles
 
@@ -44,9 +46,11 @@ node --test tests/*.test.js
 node --check app.js background.js db.js shared/model.js shared/workspace.js
 ```
 
-## Independence
+## Independence and Acknowledgements
 
 Licence Operations Desk is an independent project. It is not an official Washington State Gambling Commission product and is not affiliated with, sponsored by, or endorsed by WSGC.
+
+Thanks to Ryan Wilson for early testing, feedback, and feature suggestions that helped improve Licence Operations Desk.
 
 ## License
 
